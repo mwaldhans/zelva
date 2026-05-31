@@ -12,7 +12,11 @@
             <a class="school-brand" href="{{ url_for('index') }}">
                 <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnazium Zidlochovice">
             </a>
-            <a class="admin-link" href="{{ url_for('index') }}">Zpět do aplikace</a>
+            <nav class="site-nav" aria-label="Hlavni menu">
+                <a class="site-nav-link" href="{{ url_for('index') }}">Ulohy</a>
+                <a class="site-nav-link" href="{{ url_for('sandbox') }}">Piskoviste</a>
+                <a class="site-nav-link active" href="{{ url_for('admin') }}">Administrace</a>
+            </nav>
         </div>
     </header>
 

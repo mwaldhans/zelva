@@ -39,20 +39,7 @@ def _pattern_ids_from_source() -> list[str]:
 
 
 def _admin_pattern_ids() -> list[str]:
-    ids = _pattern_ids_from_source()
-
-    for number in range(26, 41):
-        ids.append(f"auto_poly_{number}")
-    for number in range(41, 61):
-        ids.append(f"auto_cycle_{number}")
-    for number in range(61, 81):
-        ids.append(f"auto_pattern_{number}")
-    for number in range(81, 91):
-        ids.append(f"auto_func_{number}")
-    for number in range(91, 101):
-        ids.append(f"auto_recur_{number}")
-
-    return ids
+    return _pattern_ids_from_source()
 
 
 def _clean_pattern_overrides(raw_overrides: object) -> dict[str, dict[str, object]]:
@@ -240,6 +227,10 @@ def create_app(test_config: dict | None = None) -> Flask:
     @app.get("/")
     def index() -> str:
         return render_template("index.html")
+
+    @app.get("/sandbox")
+    def sandbox() -> str:
+        return render_template("sandbox.html")
 
     @app.get("/admin")
     def admin() -> str:

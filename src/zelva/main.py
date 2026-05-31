@@ -9,3 +9,7 @@ def main() -> int:
     debug = os.getenv("DEBUG", "1") == "1"
     app.run(host=host, port=port, debug=debug)
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

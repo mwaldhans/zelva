@@ -5,6 +5,7 @@ const logEl = document.getElementById("log");
 const resultEl = document.getElementById("result");
 const drawBtn = document.getElementById("drawBtn");
 const stepBtn = document.getElementById("stepBtn");
+const stepBackBtn = document.getElementById("stepBackBtn");
 const clearBtn = document.getElementById("clearBtn");
 const stopBtn = document.getElementById("stopBtn");
 const patternListEl = document.getElementById("patternList");
@@ -19,6 +20,7 @@ const footerTaskTimeEl = document.getElementById("footerTaskTime");
 const footerTotalTimeEl = document.getElementById("footerTotalTime");
 const urlParams = new URLSearchParams(window.location.search);
 const IS_ADMIN_PREVIEW = urlParams.get("admin_preview") === "1";
+const IS_SANDBOX = window.location.pathname.endsWith("/sandbox") || urlParams.get("sandbox") === "1";
 const SHOULD_AUTORUN = urlParams.get("autorun") === "1";
 const IS_STEP_MODE = urlParams.get("stepmode") === "1";
 
@@ -27,41 +29,39 @@ const BASE_COMMAND_DELAY_MS = 170;
 const TURTLE_SIZE = 11;
 const VISIBLE_SOLUTION_LINES = 2;
 const SPEED_STORAGE_KEY = "zelva_draw_speed";
-const TARGET_PATTERN_COUNT = 100;
 const DRAFT_STORAGE_KEY = "zelva_code_drafts_v1";
 const PROGRESS_STORAGE_KEY = "zelva_progress_cache_v1";
 const TIME_STORAGE_KEY = "zelva_time_spent_v1";
 
-const CATEGORY_ORDER = ["Zaklady", "Opakovani", "Vzory", "Funkce", "Fraktaly"];
+const CATEGORY_ORDER = ["Základy", "Opakování", "Vzory", "Fraktály", "Funkce"];
 
 const PATTERNS = [
-    { id: "square", category: "Zaklady", name: "1. Ctverec", hint: "Ctverec ma 4 stejne strany a 4 prave uhly. Otoc se 4x o 90 stupnu.", commands: ["forward(100)", "left(90)", "forward(100)", "left(90)", "forward(100)", "left(90)", "forward(100)"] },
-    { id: "rectangle", category: "Zaklady", name: "2. Obdelnik", hint: "Obdelnik ma 2 delsi a 2 kratsi strany. Strany se strídají.", commands: ["forward(140)", "left(90)", "forward(80)", "left(90)", "forward(140)", "left(90)", "forward(80)"] },
-    { id: "triangle", category: "Zaklady", name: "3. Trojuhelnik", hint: "Rovnostranny trojuhelnik: vnitrni uhel je 60 st., ale zelva se otaci o vnejsi uhel = 180 - 60 = 120 stupnu.", commands: ["left(30)", "forward(120)", "left(120)", "forward(120)", "left(120)", "forward(120)"] },
-    { id: "pentagon", category: "Zaklady", name: "4. Petiuhelnik", hint: "Vzorec pro pravidelny n-uhelnik: vnejsi uhel = 360 / n. Pro petiuhelnik: 360 / 5 = 72 stupnu.", commands: ["left(18)", "forward(90)", "left(72)", "forward(90)", "left(72)", "forward(90)", "left(72)", "forward(90)", "left(72)", "forward(90)"] },
-    { id: "hexagon", category: "Zaklady", name: "5. Sestiuhelnik", hint: "Sestiuhelnik: vnejsi uhel = 360 / 6 = 60 stupnu. Pouzij stejny vzorec jako pro petiuhelnik.", commands: ["forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)"] },
-    { id: "octagon", category: "Zaklady", name: "6. Osmiuhelnik", hint: "Osmiuhelnik: vnejsi uhel = 360 / 8 = 45 stupnu. Pouzij for i in range(8): forward(...) a left(45).", commands: ["forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)"] },
-    { id: "star", category: "Zaklady", name: "7. Hvezda", hint: "Petiramma hvezda: zelva se otaci o 144 stupnu (ne o 72). Celkem 5 ramen, na zacatku se naklon o 18 st.", commands: ["left(18)", "forward(150)", "right(144)", "forward(150)", "right(144)", "forward(150)", "right(144)", "forward(150)", "right(144)", "forward(150)"] },
-    { id: "house", category: "Zaklady", name: "8. Domecek", hint: "Domecek = ctverec + trojuhelnik (strecha). Nakresli ctverec, v rohu se otoc a nakresli rovnostranny trojuhelnik.", commands: ["forward(110)", "left(90)", "forward(80)", "left(90)", "forward(110)", "left(90)", "forward(80)", "left(30)", "forward(64)", "left(120)", "forward(64)"] },
-    { id: "stairs", category: "Opakovani", name: "9. Schody", hint: "Schody: kazdy schod = forward + left(90) + forward + right(90). Cely vzor se opakuje - zkus cyklus for i in range(...):", commands: ["forward(40)", "left(90)", "forward(30)", "right(90)", "forward(40)", "left(90)", "forward(30)", "right(90)", "forward(40)", "left(90)", "forward(30)", "right(90)", "forward(40)"] },
-    { id: "zigzag", category: "Opakovani", name: "10. Cikcak", hint: "Cikcak: strídej left a right o stejny uhel. Kazdy 'zub' je forward + otoceni.", commands: ["left(35)", "forward(70)", "right(70)", "forward(70)", "left(70)", "forward(70)", "right(70)", "forward(70)", "left(70)", "forward(70)"] },
-    { id: "diamond", category: "Opakovani", name: "11. Kosoctverec", hint: "Kosoctverec: jako ctverec, ale nakloneneny. Uhly jsou 60 a 120 stupnu. Zelva zacina naklonena.", commands: ["left(30)", "forward(90)", "left(60)", "forward(90)", "left(120)", "forward(90)", "left(60)", "forward(90)"] },
-    { id: "plus", category: "Opakovani", name: "12. Kriz", hint: "Kriz: nakresli svislou usecku, pak penup() + goto(x,y) pro skok na zacatek vodorovne usecky, potom pendown() a kresli.", commands: ["penup()", "goto(360,190)", "pendown()", "forward(100)", "penup()", "goto(310,240)", "pendown()", "right(90)", "forward(100)"] },
-    { id: "double_square", category: "Vzory", name: "13. Dvojity ctverec", hint: "Nakresli maly ctverec, pak penup() + goto() a nakresli vetsi ctverec kolem nej. Stred velkeho je totez jako stred maleho.", commands: ["forward(90)", "left(90)", "forward(90)", "left(90)", "forward(90)", "left(90)", "forward(90)", "penup()", "goto(330,210)", "pendown()", "forward(150)", "left(90)", "forward(150)", "left(90)", "forward(150)", "left(90)", "forward(150)"] },
-    { id: "square_spiral", category: "Vzory", name: "14. Ctvercova spirala", hint: "Spirala: kazda strana je o krok delsi nez predchozi, otoc se vzdy o 90 st. Vzor: forward(20), left(90), forward(30), left(90), ...", commands: ["forward(20)", "left(90)", "forward(30)", "left(90)", "forward(40)", "left(90)", "forward(50)", "left(90)", "forward(60)", "left(90)", "forward(70)", "left(90)", "forward(80)", "left(90)", "forward(90)"] },
-    { id: "flower", category: "Vzory", name: "15. Kvetina", hint: "Kvetina: dva trojuhelniky vedle sebe sdílejí spolecnou stranu. Po prvnim trojuhelniku se otoč o 60 stupnu.", commands: ["forward(80)", "left(120)", "forward(80)", "left(120)", "forward(80)", "left(120)", "right(60)", "forward(80)", "left(120)", "forward(80)", "left(120)", "forward(80)"] },
-    { id: "arrow", category: "Vzory", name: "16. Sipka", hint: "Sipka: osa + dva kratsi usecky jako pero. Pouzij penup() + goto() pro presun na spravnou pozici pro kazde pero.", commands: ["forward(120)", "left(150)", "forward(45)", "penup()", "goto(480,240)", "pendown()", "left(60)", "forward(45)"] },
-    { id: "hourglass", category: "Vzory", name: "17. Presypaci hodiny", hint: "Presypaci hodiny: ctyri usecky naklonenene o 45 stupnu. Dva trojuhelniky spojene vrcholem.", commands: ["left(45)", "forward(120)", "right(135)", "forward(120)", "right(135)", "forward(120)", "right(135)", "forward(120)"] },
-    { id: "flag", category: "Vzory", name: "18. Vlajka", hint: "Vlajka: nejdřiv nakresli svislou tyc (left 90 + forward), pak vlajku jako trojuhelnik vlevo od tyce.", commands: ["left(90)", "forward(140)", "right(90)", "forward(90)", "right(120)", "forward(104)", "right(120)", "forward(104)"] },
-    { id: "frame", category: "Vzory", name: "19. Ram", hint: "Ram: nejdřiv velky obdelnik, pak penup() + goto() dovnitr a nakresli mensi obdelnik (okraj rámu).", commands: ["forward(170)", "left(90)", "forward(120)", "left(90)", "forward(170)", "left(90)", "forward(120)", "penup()", "goto(305,185)", "pendown()", "forward(110)", "left(90)", "forward(70)", "left(90)", "forward(110)", "left(90)", "forward(70)"] },
-    { id: "letter_z", category: "Vzory", name: "20. Pismeno Z", hint: "Pismeno Z: tri usecky. Horni vodorovná, diagonala dolů doprava, dolní vodorovná. Pouzij goto() nebo natočení.", commands: ["penup()", "goto(300,190)", "pendown()", "forward(140)", "right(135)", "forward(198)", "left(135)", "forward(140)"] },
-    { id: "polygon_function", category: "Funkce", name: "25. Funkce: polygon", hint: "Definuj funkci def polygon(): s cyklem uvnitr, pak ji zavolej. Funkce sdruzi opakujici se kroky do jednoho celku, ktery muzes volat vicekrat.", commands: ["def polygon():", "    for i in range(6):", "        forward(70)", "        left(60)", "", "polygon()"] },
-    { id: "koch_line", category: "Fraktaly", name: "21. Kochova krivka (uroven 4)", hint: "Koch: kazda usecka se nahradi 4 kratsimi: rovne, zahni doleva, zahni doprava, rovne. Cyklus v cyklu znazornuje hlubsi uroven fraktalu.", commands: ["# Koch motiv ve 4 urovnich", "for l1 in range(2):", "    for l2 in range(2):", "        for l3 in range(2):", "            for l4 in range(2):", "                forward(7)", "                left(60)", "                forward(7)", "                right(120)", "                forward(7)", "                left(60)", "                forward(7)", "            right(120)", "        left(60)", "    right(120)"] },
+    { id: "square", category: "Základy", name: "1. Čtverec", hint: "Čtverec má 4 stejné strany a 4 pravé úhly. Otoč se 4x o 90 stupňů.", commands: ["forward(100)", "left(90)", "forward(100)", "left(90)", "forward(100)", "left(90)", "forward(100)"] },
+    { id: "rectangle", category: "Základy", name: "2. Obdélník", hint: "Obdélník má 2 delší a 2 kratší strany. Strany se střídají.", commands: ["forward(140)", "left(90)", "forward(80)", "left(90)", "forward(140)", "left(90)", "forward(80)"] },
+    { id: "triangle", category: "Základy", name: "3. Trojúhelník", hint: "Rovnostranný trojúhelník: vnitřní úhel je 60 st., ale želva se otáčí o vnější úhel = 180 - 60 = 120 stupňů.", commands: ["left(30)", "forward(120)", "left(120)", "forward(120)", "left(120)", "forward(120)"] },
+    { id: "pentagon", category: "Základy", name: "4. Pětiúhelník", hint: "Vzorec pro pravidelný n-úhelník: vnější úhel = 360 / n. Pro pětiúhelník: 360 / 5 = 72 stupňů.", commands: ["left(18)", "forward(90)", "left(72)", "forward(90)", "left(72)", "forward(90)", "left(72)", "forward(90)", "left(72)", "forward(90)"] },
+    { id: "hexagon", category: "Základy", name: "5. Šestiúhelník", hint: "Šestiúhelník: vnější úhel = 360 / 6 = 60 stupňů. Použij stejný vzorec jako pro pětiúhelník.", commands: ["forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)", "left(60)", "forward(80)"] },
+    { id: "octagon", category: "Základy", name: "6. Osmiúhelník", hint: "Osmiúhelník: vnější úhel = 360 / 8 = 45 stupňů. Použij for i in range(8): forward(...) a left(45).", commands: ["forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)", "left(45)", "forward(60)"] },
+    { id: "star", category: "Základy", name: "7. Hvězda", hint: "Pětiramenná hvězda: želva se otáčí o 144 stupňů (ne o 72). Celkem 5 ramen, na začátku se nakloň o 18 st.", commands: ["left(18)", "forward(150)", "right(144)", "forward(150)", "right(144)", "forward(150)", "right(144)", "forward(150)", "right(144)", "forward(150)"] },
+    { id: "house", category: "Základy", name: "8. Domeček", hint: "Domeček = čtverec + trojúhelník (střecha). Nakresli čtverec, v rohu se otoč a nakresli rovnostranný trojúhelník.", commands: ["forward(110)", "left(90)", "forward(80)", "left(90)", "forward(110)", "left(90)", "forward(80)", "left(30)", "forward(64)", "left(120)", "forward(64)"] },
+    { id: "stairs", category: "Opakování", name: "9. Schody", hint: "Schody: každý schod = forward + left(90) + forward + right(90). Celý vzor se opakuje - zkus cyklus for i in range(...):", commands: ["forward(40)", "left(90)", "forward(30)", "right(90)", "forward(40)", "left(90)", "forward(30)", "right(90)", "forward(40)", "left(90)", "forward(30)", "right(90)", "forward(40)"] },
+    { id: "zigzag", category: "Opakování", name: "10. Cikcak", hint: "Cikcak: střídej left a right o stejný úhel. Každý 'zub' je forward + otočení.", commands: ["left(35)", "forward(70)", "right(70)", "forward(70)", "left(70)", "forward(70)", "right(70)", "forward(70)", "left(70)", "forward(70)"] },
+    { id: "diamond", category: "Opakování", name: "11. Kosočtverec", hint: "Kosočtverec: jako čtverec, ale nakloněný. Úhly jsou 60 a 120 stupňů. Želva začíná nakloněná.", commands: ["left(30)", "forward(90)", "left(60)", "forward(90)", "left(120)", "forward(90)", "left(60)", "forward(90)"] },
+    { id: "plus", category: "Opakování", name: "12. Kříž", hint: "Kříž: nakresli svislou úsečku, pak penup() + goto(x,y) pro skok na začátek vodorovné úsečky, potom pendown() a kresli.", commands: ["penup()", "goto(360,190)", "pendown()", "forward(100)", "penup()", "goto(310,240)", "pendown()", "right(90)", "forward(100)"] },
+    { id: "double_square", category: "Vzory", name: "13. Dvojitý čtverec", hint: "Nakresli malý čtverec, pak penup() + goto() a nakresli větší čtverec kolem něj. Střed velkého je totéž jako střed malého.", commands: ["forward(90)", "left(90)", "forward(90)", "left(90)", "forward(90)", "left(90)", "forward(90)", "penup()", "goto(330,210)", "pendown()", "forward(150)", "left(90)", "forward(150)", "left(90)", "forward(150)", "left(90)", "forward(150)"] },
+    { id: "square_spiral", category: "Vzory", name: "14. Čtvercová spirála", hint: "Spirála: každá strana je o krok delší než předchozí, otoč se vždy o 90 st. Vzor: forward(20), left(90), forward(30), left(90), ...", commands: ["forward(20)", "left(90)", "forward(30)", "left(90)", "forward(40)", "left(90)", "forward(50)", "left(90)", "forward(60)", "left(90)", "forward(70)", "left(90)", "forward(80)", "left(90)", "forward(90)"] },
+    { id: "flower", category: "Vzory", name: "15. Květina", hint: "Květina: dva trojúhelníky vedle sebe sdílejí společnou stranu. Po prvním trojúhelníku se otoč o 60 stupňů.", commands: ["forward(80)", "left(120)", "forward(80)", "left(120)", "forward(80)", "left(120)", "right(60)", "forward(80)", "left(120)", "forward(80)", "left(120)", "forward(80)"] },
+    { id: "arrow", category: "Vzory", name: "16. Šipka", hint: "Šipka: osa + dvě kratší úsečky jako pero. Použij penup() + goto() pro přesun na správnou pozici pro každé pero.", commands: ["forward(120)", "left(150)", "forward(45)", "penup()", "goto(480,240)", "pendown()", "left(60)", "forward(45)"] },
+    { id: "hourglass", category: "Vzory", name: "17. Přesýpací hodiny", hint: "Přesýpací hodiny: čtyři úsečky nakloněné o 45 stupňů. Dva trojúhelníky spojené vrcholem.", commands: ["left(45)", "forward(120)", "right(135)", "forward(120)", "right(135)", "forward(120)", "right(135)", "forward(120)"] },
+    { id: "flag", category: "Vzory", name: "18. Vlajka", hint: "Vlajka: nejdřív nakresli svislou tyč (left 90 + forward), pak vlajku jako trojúhelník vlevo od tyče.", commands: ["left(90)", "forward(140)", "right(90)", "forward(90)", "right(120)", "forward(104)", "right(120)", "forward(104)"] },
+    { id: "frame", category: "Vzory", name: "19. Rám", hint: "Rám: nejdřív velký obdélník, pak penup() + goto() dovnitř a nakresli menší obdélník (okraj rámu).", commands: ["forward(170)", "left(90)", "forward(120)", "left(90)", "forward(170)", "left(90)", "forward(120)", "penup()", "goto(305,185)", "pendown()", "forward(110)", "left(90)", "forward(70)", "left(90)", "forward(110)", "left(90)", "forward(70)"] },
+    { id: "letter_z", category: "Vzory", name: "20. Písmeno Z", hint: "Písmeno Z: tři úsečky. Horní vodorovná, diagonála dolů doprava, dolní vodorovná. Použij goto() nebo natočení.", commands: ["penup()", "goto(300,190)", "pendown()", "forward(140)", "right(135)", "forward(198)", "left(135)", "forward(140)"] },
+    { id: "koch_line", category: "Fraktály", name: "21. Kochova křivka (úroveň 4)", hint: "Koch: každá úsečka se nahradí 4 kratšími: rovně, zahni doleva, zahni doprava, rovně. Cyklus v cyklu znázorňuje hlubší úroveň fraktálu.", commands: ["# Koch motiv ve 4 urovnich", "for l1 in range(2):", "    for l2 in range(2):", "        for l3 in range(2):", "            for l4 in range(2):", "                forward(7)", "                left(60)", "                forward(7)", "                right(120)", "                forward(7)", "                left(60)", "                forward(7)", "            right(120)", "        left(60)", "    right(120)"] },
     {
         id: "snowflake",
-        category: "Fraktaly",
-        name: "22. Fraktalni vlocka",
-        hint: "Fraktalni vlocka: 6 ramen, na konci kazdeho ramene je mensi hvezda a na ni dalsi jeste mensi. Pouzij def s parametrem delky a urovne, rekurze se zastavi kdyz uroven prekroci maximum.",
+        category: "Fraktály",
+        name: "22. Fraktální vločka",
+        hint: "Fraktální vločka: 6 ramen, na konci každého ramene je menší hvězda a na ní další ještě menší. Použij def s parametrem délky a úrovně, rekurze se zastaví, když úroveň překročí maximum.",
         commands: [
             "setheading(-90)",
             "forward(100)",
@@ -222,8 +222,9 @@ const PATTERNS = [
             "pendown()"
         ]
     },
-    { id: "fractal_tree", category: "Fraktaly", name: "23. Strom (vetve se puli)", hint: "Strom: jdi rovne (kmen), pak odboc vlevo a kresli mensi vetev, vrat se, odboc vpravo a kresli druhou vetev, vrat se. S kazdou urovni se delka puli.", commands: ["left(90)", "forward(200)", "left(30)", "forward(100)", "left(28)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "right(56)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "left(28)", "backward(100)", "right(60)", "forward(100)", "left(28)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "right(56)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "left(28)", "backward(100)", "left(30)", "backward(200)"] },
-    { id: "sierpinski_hint", category: "Fraktaly", name: "24. Sierpinski styl (uroven 4)", hint: "Sierpinski: trojuhelnik rozdeleny na mensí trojuhelniky. Kazda uroven ma polovicni stranu. Pouzij goto() pro presun na spravnou pozici.", commands: ["# Sierpinski styl: 4 velikosti trojuhelniku", "for lvl1 in range(3):", "    forward(150)", "    left(120)", "for lvl2 in range(3):", "    forward(75)", "    left(120)", "penup()", "goto(322, 262)", "pendown()", "for lvl3 in range(3):", "    forward(38)", "    left(120)", "penup()", "goto(341, 273)", "pendown()", "for lvl4 in range(3):", "    forward(19)", "    left(120)", "penup()", "goto(379, 273)", "pendown()", "for lvl4b in range(3):", "    forward(19)", "    left(120)", "penup()", "goto(360, 240)", "pendown()", "for lvl3b in range(3):", "    forward(38)", "    left(120)"] },
+    { id: "fractal_tree", category: "Fraktály", name: "23. Strom (větve se půlí)", hint: "Strom: jdi rovně (kmen), pak odboč vlevo a kresli menší větev, vrať se, odboč vpravo a kresli druhou větev, vrať se. S každou úrovní se délka půlí.", commands: ["left(90)", "forward(200)", "left(30)", "forward(100)", "left(28)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "right(56)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "left(28)", "backward(100)", "right(60)", "forward(100)", "left(28)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "right(56)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "left(28)", "backward(100)", "left(30)", "backward(200)"] },
+    { id: "sierpinski_hint", category: "Fraktály", name: "24. Sierpińského styl (úroveň 4)", hint: "Sierpinski: trojúhelník rozdělený na menší trojúhelníky. Každá úroveň má poloviční stranu. Použij goto() pro přesun na správnou pozici.", commands: ["# Sierpinski styl: 4 velikosti trojuhelniku", "for lvl1 in range(3):", "    forward(150)", "    left(120)", "for lvl2 in range(3):", "    forward(75)", "    left(120)", "penup()", "goto(322, 262)", "pendown()", "for lvl3 in range(3):", "    forward(38)", "    left(120)", "penup()", "goto(341, 273)", "pendown()", "for lvl4 in range(3):", "    forward(19)", "    left(120)", "penup()", "goto(379, 273)", "pendown()", "for lvl4b in range(3):", "    forward(19)", "    left(120)", "penup()", "goto(360, 240)", "pendown()", "for lvl3b in range(3):", "    forward(38)", "    left(120)"] },
+    { id: "polygon_function", category: "Funkce", name: "25. Funkce: polygon", hint: "Definuj funkci def polygon(): s cyklem uvnitř, pak ji zavolej. Funkce sdruží opakující se kroky do jednoho celku, který můžeš volat vícekrát.", commands: ["def polygon():", "    for i in range(6):", "        forward(70)", "        left(60)", "", "polygon()"] },
 ];
 
 function createAutoPattern(patternNumber) {
@@ -233,9 +234,9 @@ function createAutoPattern(patternNumber) {
         const turn = (360 / sides).toFixed(2);
         return {
             id: `auto_poly_${patternNumber}`,
-            category: "Zaklady",
+            category: "Základy",
             name: `${patternNumber}. Polygon ${sides} stran`,
-            hint: "Pouzij cyklus pro pravidelny polygon: forward(delka) a left(360/n).",
+            hint: "Použij cyklus pro pravidelný polygon: forward(délka) a left(360/n).",
             commands: [
                 `for i in range(${sides}):`,
                 `    forward(${length})`,
@@ -250,9 +251,9 @@ function createAutoPattern(patternNumber) {
         const turn = 70 + ((patternNumber - 41) % 5) * 8;
         return {
             id: `auto_cycle_${patternNumber}`,
-            category: "Opakovani",
-            name: `${patternNumber}. Cyklicky vzor ${patternNumber - 40}`,
-            hint: "Opakuj blok prikazu v cyklu, men delku a uhel podle zadaneho vzoru.",
+            category: "Opakování",
+            name: `${patternNumber}. Cyklický vzor ${patternNumber - 40}`,
+            hint: "Opakuj blok příkazů v cyklu, měň délku a úhel podle zadaného vzoru.",
             commands: [
                 `for i in range(${steps}):`,
                 `    forward(${base})`,
@@ -271,7 +272,7 @@ function createAutoPattern(patternNumber) {
             id: `auto_pattern_${patternNumber}`,
             category: "Vzory",
             name: `${patternNumber}. Rozeta ${patternNumber - 60}`,
-            hint: "Pouzij dva prikazy forward/backward pro okveti a pak rotaci, cele opakuj v cyklu.",
+            hint: "Použij dva příkazy forward/backward pro okvětí a pak rotaci, celé opakuj v cyklu.",
             commands: [
                 `for i in range(${petals}):`,
                 `    forward(${len})`,
@@ -291,7 +292,7 @@ function createAutoPattern(patternNumber) {
             id: `auto_func_${patternNumber}`,
             category: "Funkce",
             name: `${patternNumber}. Funkce a parametry ${patternNumber - 80}`,
-            hint: "Definuj funkci s parametry a volani opakuj v cyklu s ruznymi argumenty.",
+            hint: "Definuj funkci s parametry a volání opakuj v cyklu s různými argumenty.",
             commands: [
                 "def poly(delka, n):",
                 "    for i in range(n):",
@@ -310,9 +311,9 @@ function createAutoPattern(patternNumber) {
     const angle = 18 + ((patternNumber - 91) % 4) * 6;
     return {
         id: `auto_recur_${patternNumber}`,
-        category: "Fraktaly",
-        name: `${patternNumber}. Rekurzivni vetveni ${patternNumber - 90}`,
-        hint: "V rekurzi dej podminku if pro zastaveni a zmensuj delku pri kazdem dalsim volani.",
+        category: "Fraktály",
+        name: `${patternNumber}. Rekurzivní větvení ${patternNumber - 90}`,
+        hint: "V rekurzi dej podmínku if pro zastavení a zmenšuj délku při každém dalším volání.",
         commands: [
             "left(90)",
             "def vetev(delka, uroven):",
@@ -442,11 +443,6 @@ async function loadPatternOverrides() {
     }
 }
 
-while (PATTERNS.length < TARGET_PATTERN_COUNT) {
-    const number = PATTERNS.length + 1;
-    PATTERNS.push(createAutoPattern(number));
-}
-
 const state = createInitialState();
 const segments = [];
 const progressByPattern = new Map();
@@ -465,6 +461,7 @@ let footerTicker = null;
 let preparedStepProgram = null;
 let preparedStepSource = "";
 let preparedStepIndex = 0;
+let preparedStepStates = [];
 
 const HINT_STORAGE_KEY = "zelva_hints_used";
 const hintUsedByPattern = new Map();
@@ -743,7 +740,8 @@ function prepareStepProgram() {
     return { ok: true };
 }
 
-async function stepExecution() {
+
+async function stepExecution(direction = 1) {
     if (isRunning) {
         return { status: "busy" };
     }
@@ -754,44 +752,88 @@ async function stepExecution() {
         return { status: "error", error: prepared.error };
     }
 
-    if (!preparedStepProgram || preparedStepIndex >= preparedStepProgram.length) {
-        const evaluation = evaluateDrawing();
-        setResult(evaluation);
-        logEl.textContent = `Hotovo. ${evaluation.reason}`;
-        if (!IS_ADMIN_PREVIEW) {
-            await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
+    if (!preparedStepProgram) return { status: "error", error: "Chyba krokování." };
+
+    // Krok vpřed
+    if (direction > 0) {
+        if (preparedStepIndex >= preparedStepProgram.length) {
+            if (IS_SANDBOX) {
+                resultEl.textContent = "";
+                resultEl.className = "result";
+                logEl.textContent = "Provedeno.";
+                return { status: "done", total_steps: preparedStepProgram.length };
+            }
+            const evaluation = evaluateDrawing();
+            setResult(evaluation);
+            logEl.textContent = `Hotovo. ${evaluation.reason}`;
+            if (!IS_ADMIN_PREVIEW && !IS_SANDBOX) {
+                await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
+            }
+            renderPatternMenu();
+            return { status: "done", total_steps: preparedStepProgram.length };
         }
-        renderPatternMenu();
-        return { status: "done", total_steps: preparedStepProgram ? preparedStepProgram.length : 0 };
+        const step = preparedStepProgram[preparedStepIndex];
+        highlightCommandLine(step.lineNumber);
+        // Ulož stav před krokem
+        preparedStepStates[preparedStepIndex] = saveCurrentState();
+        isRunning = true;
+        setButtonsDisabled(true);
+        const err = await executeUserCommand(step.command, step.args);
+        isRunning = false;
+        setButtonsDisabled(false);
+        if (err === "__CANCELLED__") {
+            logEl.textContent = "Vykreslování přerušeno.";
+            return { status: "error", error: "Vykreslování přerušeno.", current_line: step.lineNumber };
+        }
+        if (err) {
+            const message = `${err} Na řádku ${step.lineNumber}: ${step.raw}`;
+            logEl.textContent = message;
+            return { status: "error", error: message, current_line: step.lineNumber };
+        }
+        preparedStepIndex += 1;
+        return {
+            status: "ok",
+            current_line: step.lineNumber,
+            next_line: preparedStepProgram[preparedStepIndex]?.lineNumber || null,
+            step_index: preparedStepIndex,
+            total_steps: preparedStepProgram.length,
+        };
     }
-
-    const step = preparedStepProgram[preparedStepIndex];
-    highlightCommandLine(step.lineNumber);
-
-    isRunning = true;
-    setButtonsDisabled(true);
-    const err = await executeUserCommand(step.command, step.args);
-    isRunning = false;
-    setButtonsDisabled(false);
-
-    if (err === "__CANCELLED__") {
-        logEl.textContent = "Vykreslovani preruseno.";
-        return { status: "error", error: "Vykreslovani preruseno.", current_line: step.lineNumber };
+    // Krok zpět
+    if (direction < 0) {
+        if (preparedStepIndex <= 0) return { status: "start" };
+        preparedStepIndex -= 1;
+        if (preparedStepStates[preparedStepIndex]) {
+            restoreState(preparedStepStates[preparedStepIndex]);
+        } else {
+            // Pokud není uložený stav, resetuj vše
+            resetCanvas();
+        }
+        highlightCommandLine(preparedStepProgram[preparedStepIndex]?.lineNumber || null);
+        setButtonsDisabled(false);
+        logEl.textContent = `Krok ${preparedStepIndex}/${preparedStepProgram.length}`;
+        return {
+            status: "ok",
+            current_line: preparedStepProgram[preparedStepIndex]?.lineNumber || null,
+            step_index: preparedStepIndex,
+            total_steps: preparedStepProgram.length,
+        };
     }
-    if (err) {
-        const message = `${err} Na radku ${step.lineNumber}: ${step.raw}`;
-        logEl.textContent = message;
-        return { status: "error", error: message, current_line: step.lineNumber };
-    }
+}
 
-    preparedStepIndex += 1;
+function saveCurrentState() {
+    // Ulož aktuální stav canvasu a želvy
     return {
-        status: "ok",
-        current_line: step.lineNumber,
-        next_line: preparedStepProgram[preparedStepIndex]?.lineNumber || null,
-        step_index: preparedStepIndex,
-        total_steps: preparedStepProgram.length,
+        image: ctx.getImageData(0, 0, canvas.width, canvas.height),
+        state: { ...state },
     };
+}
+
+function restoreState(saved) {
+    if (!saved) return;
+    ctx.putImageData(saved.image, 0, 0);
+    Object.assign(state, saved.state);
+    renderScene();
 }
 
 function createInitialState() {
@@ -969,6 +1011,52 @@ function parseCommand(rawLine, lineNumber) {
     }
 
     return { command, args, raw };
+}
+
+async function runSandboxLine(rawLine) {
+    if (!IS_SANDBOX) {
+        return { ok: false, error: "Sandbox runner je dostupny jen v piskovisti." };
+    }
+    if (isRunning) {
+        return { ok: false, error: "Pockej na dokonceni predchoziho prikazu." };
+    }
+
+    const parsed = parseCommand(rawLine, 1);
+    if (parsed.skip) {
+        return { ok: true, skipped: true };
+    }
+    if (parsed.error) {
+        logEl.textContent = parsed.error;
+        return { ok: false, error: parsed.error };
+    }
+
+    clearStepProgram();
+    isRunning = true;
+    cancelRequested = false;
+    setButtonsDisabled(true);
+
+    const err = await executeUserCommand(parsed.command, parsed.args);
+
+    isRunning = false;
+    setButtonsDisabled(false);
+
+    if (err === "__CANCELLED__") {
+        logEl.textContent = "Vykreslovani preruseno.";
+        resultEl.textContent = "";
+        resultEl.className = "result";
+        return { ok: false, error: "Vykreslovani preruseno." };
+    }
+    if (err) {
+        logEl.textContent = err;
+        resultEl.textContent = "";
+        resultEl.className = "result";
+        return { ok: false, error: err };
+    }
+
+    logEl.textContent = "Provedeno.";
+    resultEl.textContent = "";
+    resultEl.className = "result";
+    return { ok: true };
 }
 
 function handleEditorIndentation(event) {
@@ -1968,8 +2056,10 @@ function setButtonsDisabled(disabled) {
     if (stopBtn) {
         stopBtn.disabled = !disabled;
     }
-    for (const btn of patternListEl.querySelectorAll("button")) {
-        btn.disabled = disabled;
+    if (patternListEl) {
+        for (const btn of patternListEl.querySelectorAll("button")) {
+            btn.disabled = disabled;
+        }
     }
 }
 
@@ -2011,6 +2101,10 @@ async function loadProgress() {
 }
 
 async function saveProgress(patternId, solutionText, solved, score) {
+    if (IS_SANDBOX) {
+        setLocalDraft(patternId, solutionText);
+        return;
+    }
     const existing = progressByPattern.get(patternId);
     const wasSolved = Boolean(existing && existing.solved);
     const solvedEver = Boolean(solved) || Boolean(existing && existing.solved);
@@ -2071,6 +2165,10 @@ function persistDraft(patternId, solutionText, keepAlive = false) {
     }
     setLocalDraft(patternId, solutionText);
 
+    if (IS_SANDBOX) {
+        return;
+    }
+
     const state = getProgressState(patternId);
 
     const record = {
@@ -2111,7 +2209,7 @@ function persistCurrentDraft(keepAlive = false) {
 }
 
 function scheduleDraftSave() {
-    if (isRunning || !selectedPatternId) {
+    if (IS_SANDBOX || isRunning || !selectedPatternId) {
         return;
     }
 
@@ -2129,6 +2227,9 @@ function scheduleDraftSave() {
 }
 
 function renderPatternMenu() {
+    if (!patternListEl || IS_SANDBOX) {
+        return;
+    }
     patternListEl.textContent = "";
     const categories = [];
     for (const category of CATEGORY_ORDER) {
@@ -2305,10 +2406,19 @@ async function runCommands() {
         }
     }
 
+    if (IS_SANDBOX) {
+        resultEl.textContent = "";
+        resultEl.className = "result";
+        logEl.textContent = "Provedeno.";
+        isRunning = false;
+        setButtonsDisabled(false);
+        return;
+    }
+
     const evaluation = evaluateDrawing();
     setResult(evaluation);
     logEl.textContent = `Hotovo. ${evaluation.reason}`;
-    if (!IS_ADMIN_PREVIEW) {
+    if (!IS_ADMIN_PREVIEW && !IS_SANDBOX) {
         await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
     }
     renderPatternMenu();
@@ -2333,8 +2443,15 @@ async function runSingleStep() {
 drawBtn.addEventListener("click", runCommands);
 if (stepBtn) {
     stepBtn.addEventListener("click", () => {
-        runSingleStep().catch(() => {
-            logEl.textContent = "Krokovani selhalo.";
+        stepExecution(1).catch(() => {
+            logEl.textContent = "Krokování selhalo.";
+        });
+    });
+}
+if (stepBackBtn) {
+    stepBackBtn.addEventListener("click", () => {
+        stepExecution(-1).catch(() => {
+            logEl.textContent = "Krok zpět selhal.";
         });
     });
 }
@@ -2383,19 +2500,25 @@ document.addEventListener("visibilitychange", () => {
 
 async function initApp() {
     applyAdminPreviewMode();
-    loadHintUsage();
-    loadProgressCache();
-    loadDraftStorage();
-    loadTimeStorage();
     initSpeedControl();
-    await loadPatternOverrides();
-    await loadProgress();
-    const requestedPatternId = getPatternIdFromUrl();
-    if (requestedPatternId) {
-        selectedPatternId = requestedPatternId;
-    }
-    renderPatternMenu();
-    loadPattern(selectedPatternId);
+        if (!IS_SANDBOX) {
+            loadHintUsage();
+            loadProgressCache();
+            loadDraftStorage();
+            loadTimeStorage();
+            await loadPatternOverrides();
+            await loadProgress();
+            const requestedPatternId = getPatternIdFromUrl();
+            if (requestedPatternId) {
+                selectedPatternId = requestedPatternId;
+            }
+            renderPatternMenu();
+            loadPattern(selectedPatternId);
+        } else {
+            selectedPatternId = "";
+            window.zelvaSandboxRunLine = runSandboxLine;
+            resetCanvas();
+        }
     if (IS_ADMIN_PREVIEW && SHOULD_AUTORUN) {
         runCommands().catch(() => {
             // Keep preview resilient even if draw fails.

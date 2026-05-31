@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Zelvi grafika na webu</title>
+    <title>Želví grafika na webu</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
 </head>
 <body>
@@ -12,23 +12,27 @@
             <a class="school-brand" href="https://gymnzidlo.cz/" target="_blank" rel="noopener noreferrer">
                 <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnazium Zidlochovice">
             </a>
-            <a class="admin-link" href="{{ url_for('admin') }}">Administrace</a>
+            <nav class="site-nav" aria-label="Hlavni menu">
+                <a class="site-nav-link active" href="{{ url_for('index') }}">Ulohy</a>
+                <a class="site-nav-link" href="{{ url_for('sandbox') }}">Piskoviste</a>
+                <a class="site-nav-link" href="{{ url_for('admin') }}">Administrace</a>
+            </nav>
         </div>
     </header>
     <main class="layout">
         <section class="panel menu-panel">
-            <h2>Ulohy a kategorie</h2>
+            <h2>Úlohy a kategorie</h2>
             <ul id="patternList" class="pattern-list" aria-label="Seznam uloh"></ul>
         </section>
 
         <section class="panel controls">
-            <h1>Zelvi grafika</h1>
+            <h1>Želví grafika</h1>
             <p id="currentPattern" class="current-pattern"></p>
             <div class="hint-container">
-                <button id="hintToggleBtn" type="button" class="hint-toggle" hidden>Zobraz napovedu</button>
+                <button id="hintToggleBtn" type="button" class="hint-toggle" hidden>Zobraz nápovědu</button>
                 <p id="patternHint" class="hint hint-body" hidden></p>
             </div>
-            <p>Zadejte prikazy po radcich (napr. <strong>forward(100)</strong>, <strong>left(90)</strong>).</p>
+            <p>Zadejte příkazy po řádcích (např. <strong>forward(100)</strong>, <strong>left(90)</strong>).</p>
             <textarea id="commands" spellcheck="false">forward(100)
 left(90)
 forward(100)
@@ -39,34 +43,36 @@ forward(100)</textarea>
             <div class="actions">
                 <button id="drawBtn" type="button">Vykreslit</button>
                 <button id="stepBtn" type="button" class="secondary">Krokovat</button>
+                <button id="stepBackBtn" type="button" class="secondary">Krok zpět</button>
                 <button id="clearBtn" type="button" class="secondary">Vymazat</button>
-                <button id="stopBtn" type="button" class="danger" disabled>Prerusit</button>
+                <button id="stopBtn" type="button" class="danger" disabled>Přerušit</button>
             </div>
             <div class="speed-control">
-                <label for="speedRange">Rychlost vykreslovani</label>
+                <label for="speedRange">Rychlost vykreslování</label>
                 <input id="speedRange" type="range" min="1" max="10" step="1" value="5" aria-describedby="speedValue">
                 <span id="speedValue" class="speed-value">5 / 10</span>
             </div>
             <p id="result" class="result" aria-live="polite"></p>
-            <p class="hint">Python turtle prikazy: forward/fd, backward/bk, left/lt, right/rt, penup/pu, pendown/pd, goto/setpos, setheading/seth, home, for i in range(n):, def funkce(): a volani funkce().</p>
-            <p class="hint">Reseni se uklada automaticky po vykresleni.</p>
+            <p class="hint">Python turtle příkazy: forward/fd, backward/bk, left/lt, right/rt, penup/pu, pendown/pd, goto/setpos, setheading/seth, home, for i in range(n):, def funkce(): a volání funkce().</p>
+            <p class="hint">Řešení se ukládá automaticky po vykreslení.</p>
             <pre id="log" aria-live="polite"></pre>
         </section>
 
         <section class="panel canvas-wrap">
             <div class="canvas-stack">
                 <canvas id="canvas" width="720" height="480"></canvas>
-                <div class="reference-label">Sedy vzor: co ma vyjit (je primo v platne)</div>
+                <div class="reference-label">Šedý vzor: co má vyjít (je přímo v plátně)</div>
             </div>
         </section>
+
     </main>
 
     <footer class="app-footer" role="contentinfo">
         <span class="footer-owner">© 2026 Marek Waldhans</span>
-        <span class="footer-stats" aria-label="Statistiky uloh">
+        <span class="footer-stats" aria-label="Statistiky úloh">
             <span id="footerSolved" class="footer-stat">Hotovo: 0</span>
-            <span id="footerRemaining" class="footer-stat">Zbyva: 0</span>
-            <span id="footerTaskTime" class="footer-stat">Cas ulohy: 0:00</span>
+            <span id="footerRemaining" class="footer-stat">Zbývá: 0</span>
+            <span id="footerTaskTime" class="footer-stat">Čas úlohy: 0:00</span>
             <span id="footerTotalTime" class="footer-stat">Celkem: 0:00</span>
         </span>
     </footer>

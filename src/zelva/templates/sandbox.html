@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pískoviště</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header class="school-header">
+        <div class="school-header-inner">
+            <a class="school-brand" href="https://gymnzidlo.cz/" target="_blank" rel="noopener noreferrer">
+                <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnazium Zidlochovice">
+            </a>
+            <nav class="site-nav" aria-label="Hlavni menu">
+                <a class="site-nav-link" href="{{ url_for('index') }}">Ulohy</a>
+                <a class="site-nav-link active" href="{{ url_for('sandbox') }}">Piskoviste</a>
+                <a class="site-nav-link" href="{{ url_for('admin') }}">Administrace</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="layout sandbox-layout">
+        <aside class="panel sandbox-sidebar">
+            <h2>Rychlé příkazy</h2>
+            <p>Terminál přijímá vždy jeden řádek. Klikni na zkratku nebo napiš svůj příkaz dole a stiskni Enter.</p>
+            <div class="sandbox-shortcuts">
+                <button type="button" class="sandbox-shortcut" data-command="forward(100)">forward(100)</button>
+                <button type="button" class="sandbox-shortcut" data-command="left(90)">left(90)</button>
+                <button type="button" class="sandbox-shortcut" data-command="right(90)">right(90)</button>
+                <button type="button" class="sandbox-shortcut" data-command="penup()">penup()</button>
+                <button type="button" class="sandbox-shortcut" data-command="pendown()">pendown()</button>
+                <button type="button" class="sandbox-shortcut" data-command="home()">home()</button>
+            </div>
+            <p class="hint">Každý příkaz se přidá do historie a hned vykreslí. Výsledky se nehodnotí ani neukládají.</p>
+        </aside>
+
+        <section class="panel controls sandbox-panel">
+            <h1>Pískoviště</h1>
+            <p>Volný prostor pro zkoušení příkazů bez hodnocení. Každý řádek se po stisku Enter hned provede, stejně jako v terminálu.</p>
+            <div class="sandbox-terminal">
+                <div id="sandboxHistory" class="sandbox-history" aria-live="polite"></div>
+                <form id="sandboxForm" class="sandbox-prompt-row">
+                    <span class="sandbox-prompt" aria-hidden="true">&gt;</span>
+                    <input id="sandboxInput" class="sandbox-input" type="text" autocomplete="off" spellcheck="false" placeholder="forward(100)">
+                    <button id="sandboxRunBtn" type="button" class="secondary">Enter</button>
+                    <button id="clearBtn" type="button" class="secondary">Vymazat</button>
+                </form>
+            </div>
+            <textarea id="commands" hidden></textarea>
+            <button id="drawBtn" type="button" hidden>Vykreslit</button>
+            <button id="stepBtn" type="button" hidden>Krokovat</button>
+            <button id="stepBackBtn" type="button" hidden>Krok zpět</button>
+            <button id="stopBtn" type="button" hidden>Přerušit</button>
+            <div class="speed-control">
+                <label for="speedRange">Rychlost vykreslování</label>
+                <input id="speedRange" type="range" min="1" max="10" step="1" value="5" aria-describedby="speedValue">
+                <span id="speedValue" class="speed-value">5 / 10</span>
+            </div>
+            <p id="result" class="result" aria-live="polite"></p>
+            <p class="hint">Stejné příkazy jako v aplikaci: forward/fd, backward/bk, left/lt, right/rt, penup/pu, pendown/pd, goto/setpos, setheading/seth, home, for i in range(n): a def funkce():.</p>
+            <pre id="log" aria-live="polite"></pre>
+        </section>
+
+        <section class="panel canvas-wrap sandbox-canvas-wrap">
+            <div class="canvas-stack">
+                <canvas id="canvas" width="720" height="480"></canvas>
+                <div class="reference-label">Volné kreslení na plátně</div>
+            </div>
+        </section>
+    </main>
+
+    <script>
+        const sandboxInput = document.getElementById("sandboxInput");
+        const sandboxHistory = document.getElementById("sandboxHistory");
+        const sandboxRunBtn = document.getElementById("sandboxRunBtn");
+        const sandboxForm = document.getElementById("sandboxForm");
+        const sandboxClearBtn = document.getElementById("clearBtn");
+        const sandboxShortcuts = Array.from(document.querySelectorAll(".sandbox-shortcut"));
+
+        function appendHistoryLine(text, kind = "command") {
+            const line = document.createElement("div");
+            line.className = `sandbox-history-line ${kind}`;
+            line.textContent = text;
+            sandboxHistory.append(line);
+            sandboxHistory.scrollTop = sandboxHistory.scrollHeight;
+        }
+
+        async function runSandboxCommand() {
+            const line = sandboxInput.value.trimEnd();
+            if (!line) {
+                return;
+            }
+
+            appendHistoryLine(`> ${line}`);
+            sandboxInput.value = "";
+
+            if (typeof window.zelvaSandboxRunLine !== "function") {
+                appendHistoryLine("Sandbox runner neni pripraven.", "system");
+                return;
+            }
+
+            const result = await window.zelvaSandboxRunLine(line);
+            if (!result?.ok && result?.error) {
+                appendHistoryLine(result.error, "system");
+            }
+        }
+
+        sandboxForm.addEventListener("submit", (event) => {
+            event.preventDefault();
+            runSandboxCommand();
+        });
+
+        sandboxRunBtn.addEventListener("click", runSandboxCommand);
+        for (const shortcut of sandboxShortcuts) {
+            shortcut.addEventListener("click", () => {
+                sandboxInput.value = shortcut.dataset.command || "";
+                sandboxInput.focus();
+            });
+        }
+        sandboxClearBtn.addEventListener("click", () => {
+            sandboxHistory.textContent = "";
+            sandboxInput.value = "";
+            sandboxInput.focus();
+        });
+    </script>
+
+    <script src="{{ url_for('static', filename='turtle.js') }}"></script>
+</body>
+</html>
