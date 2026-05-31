@@ -4,6 +4,7 @@ const commandsEl = document.getElementById("commands");
 const logEl = document.getElementById("log");
 const resultEl = document.getElementById("result");
 const drawBtn = document.getElementById("drawBtn");
+const stepBtn = document.getElementById("stepBtn");
 const clearBtn = document.getElementById("clearBtn");
 const stopBtn = document.getElementById("stopBtn");
 const patternListEl = document.getElementById("patternList");
@@ -16,6 +17,10 @@ const footerSolvedEl = document.getElementById("footerSolved");
 const footerRemainingEl = document.getElementById("footerRemaining");
 const footerTaskTimeEl = document.getElementById("footerTaskTime");
 const footerTotalTimeEl = document.getElementById("footerTotalTime");
+const urlParams = new URLSearchParams(window.location.search);
+const IS_ADMIN_PREVIEW = urlParams.get("admin_preview") === "1";
+const SHOULD_AUTORUN = urlParams.get("autorun") === "1";
+const IS_STEP_MODE = urlParams.get("stepmode") === "1";
 
 const BASE_FRAME_DELAY_MS = 28;
 const BASE_COMMAND_DELAY_MS = 170;
@@ -325,6 +330,118 @@ function createAutoPattern(patternNumber) {
     };
 }
 
+function applyPatternOverrides(overrides) {
+    if (!overrides || typeof overrides !== "object") {
+        return;
+    }
+
+    for (const pattern of PATTERNS) {
+        const override = overrides[pattern.id];
+        if (!override || typeof override !== "object") {
+            continue;
+        }
+
+        if (typeof override.category === "string") {
+            pattern.category = override.category;
+        }
+        if (typeof override.name === "string") {
+            pattern.name = override.name;
+        }
+        if (typeof override.hint === "string") {
+            pattern.hint = override.hint;
+        }
+        if (typeof override.initial_text === "string") {
+            pattern.initial_text = override.initial_text;
+        }
+        if (Number.isFinite(Number(override.initial_lines))) {
+            const safeLines = Math.floor(Number(override.initial_lines));
+            if (safeLines > 0) {
+                pattern.initial_lines = safeLines;
+            }
+        }
+        if (Array.isArray(override.commands) && override.commands.every((item) => typeof item === "string")) {
+            pattern.commands = override.commands.slice();
+        }
+    }
+}
+
+function getInitialLinesCount(pattern) {
+    const configured = Number(pattern.initial_lines);
+    if (Number.isFinite(configured) && configured > 0) {
+        return Math.floor(configured);
+    }
+    return VISIBLE_SOLUTION_LINES;
+}
+
+function getInitialSolverText(pattern) {
+    if (typeof pattern.initial_text === "string" && pattern.initial_text.trim()) {
+        return pattern.initial_text;
+    }
+    return pattern.commands.slice(0, getInitialLinesCount(pattern)).join("\n");
+}
+
+function getPatternIdFromUrl() {
+    try {
+        const requestedPattern = urlParams.get("pattern");
+        if (!requestedPattern) {
+            return null;
+        }
+        const matchingPattern = PATTERNS.find((pattern) => pattern.id === requestedPattern);
+        return matchingPattern ? matchingPattern.id : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+function applyAdminPreviewMode() {
+    if (!IS_ADMIN_PREVIEW) {
+        return;
+    }
+
+    const headerEl = document.querySelector(".school-header");
+    const menuEl = document.querySelector(".menu-panel");
+    const controlsEl = document.querySelector(".controls");
+    const footerEl = document.querySelector(".app-footer");
+    const layoutEl = document.querySelector(".layout");
+    const canvasWrapEl = document.querySelector(".canvas-wrap");
+
+    if (headerEl) {
+        headerEl.style.display = "none";
+    }
+    if (menuEl) {
+        menuEl.style.display = "none";
+    }
+    if (controlsEl) {
+        controlsEl.style.display = "none";
+    }
+    if (footerEl) {
+        footerEl.style.display = "none";
+    }
+    if (layoutEl) {
+        layoutEl.style.maxWidth = "none";
+        layoutEl.style.padding = "0.4rem";
+        layoutEl.style.gridTemplateColumns = "1fr";
+    }
+    if (canvasWrapEl) {
+        canvasWrapEl.style.padding = "0.4rem";
+    }
+    document.body.style.background = "#f3f7f5";
+}
+
+async function loadPatternOverrides() {
+    try {
+        const response = await fetch("/api/pattern-overrides");
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json();
+        applyPatternOverrides(payload.overrides || {});
+    } catch (_) {
+        // Ignore missing admin overrides.
+    }
+}
+
 while (PATTERNS.length < TARGET_PATTERN_COUNT) {
     const number = PATTERNS.length + 1;
     PATTERNS.push(createAutoPattern(number));
@@ -345,6 +462,9 @@ const timeSpentByPattern = new Map();
 let activePatternId = null;
 let activePatternStartedAt = 0;
 let footerTicker = null;
+let preparedStepProgram = null;
+let preparedStepSource = "";
+let preparedStepIndex = 0;
 
 const HINT_STORAGE_KEY = "zelva_hints_used";
 const hintUsedByPattern = new Map();
@@ -558,6 +678,122 @@ function setLocalDraft(patternId, solutionText) {
     saveDraftStorage();
 }
 
+function highlightCommandLine(lineNumber) {
+    if (!commandsEl || !lineNumber || lineNumber < 1) {
+        return;
+    }
+
+    const text = commandsEl.value;
+    let currentLine = 1;
+    let start = 0;
+
+    while (currentLine < lineNumber && start < text.length) {
+        const newlinePos = text.indexOf("\n", start);
+        if (newlinePos === -1) {
+            return;
+        }
+        start = newlinePos + 1;
+        currentLine += 1;
+    }
+
+    const endPos = text.indexOf("\n", start);
+    const end = endPos === -1 ? text.length : endPos;
+    commandsEl.focus({ preventScroll: true });
+    commandsEl.setSelectionRange(start, end);
+}
+
+function clearStepProgram() {
+    preparedStepProgram = null;
+    preparedStepSource = "";
+    preparedStepIndex = 0;
+}
+
+function prepareStepProgram() {
+    const sourceText = commandsEl.value;
+    if (preparedStepProgram && preparedStepSource === sourceText) {
+        return { ok: true };
+    }
+
+    const expansion = expandProgramLines(sourceText.split(/\r?\n/));
+    if (!expansion.ok) {
+        return { ok: false, error: expansion.error };
+    }
+
+    const stepCommands = [];
+    for (const source of expansion.lines) {
+        const parsed = parseCommand(source.text, source.lineNumber);
+        if (parsed.skip) {
+            continue;
+        }
+        if (parsed.error) {
+            return { ok: false, error: parsed.error };
+        }
+        stepCommands.push({
+            command: parsed.command,
+            args: parsed.args,
+            raw: parsed.raw,
+            lineNumber: source.lineNumber,
+        });
+    }
+
+    preparedStepProgram = stepCommands;
+    preparedStepSource = sourceText;
+    preparedStepIndex = 0;
+    resetCanvas();
+    return { ok: true };
+}
+
+async function stepExecution() {
+    if (isRunning) {
+        return { status: "busy" };
+    }
+
+    const prepared = prepareStepProgram();
+    if (!prepared.ok) {
+        logEl.textContent = prepared.error;
+        return { status: "error", error: prepared.error };
+    }
+
+    if (!preparedStepProgram || preparedStepIndex >= preparedStepProgram.length) {
+        const evaluation = evaluateDrawing();
+        setResult(evaluation);
+        logEl.textContent = `Hotovo. ${evaluation.reason}`;
+        if (!IS_ADMIN_PREVIEW) {
+            await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
+        }
+        renderPatternMenu();
+        return { status: "done", total_steps: preparedStepProgram ? preparedStepProgram.length : 0 };
+    }
+
+    const step = preparedStepProgram[preparedStepIndex];
+    highlightCommandLine(step.lineNumber);
+
+    isRunning = true;
+    setButtonsDisabled(true);
+    const err = await executeUserCommand(step.command, step.args);
+    isRunning = false;
+    setButtonsDisabled(false);
+
+    if (err === "__CANCELLED__") {
+        logEl.textContent = "Vykreslovani preruseno.";
+        return { status: "error", error: "Vykreslovani preruseno.", current_line: step.lineNumber };
+    }
+    if (err) {
+        const message = `${err} Na radku ${step.lineNumber}: ${step.raw}`;
+        logEl.textContent = message;
+        return { status: "error", error: message, current_line: step.lineNumber };
+    }
+
+    preparedStepIndex += 1;
+    return {
+        status: "ok",
+        current_line: step.lineNumber,
+        next_line: preparedStepProgram[preparedStepIndex]?.lineNumber || null,
+        step_index: preparedStepIndex,
+        total_steps: preparedStepProgram.length,
+    };
+}
+
 function createInitialState() {
     return {
         x: canvas.width / 2,
@@ -703,6 +939,15 @@ function parseCommand(rawLine, lineNumber) {
         return { skip: true };
     }
 
+    // Assignment: delka = 20, delka += 10, delka -= 5, delka *= 2, delka /= 3
+    const opAssignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*([+\-*/])=\s*(.+)$/);
+    const assignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
+    if (opAssignMatch) {
+        return { command: 'assign_op', args: [opAssignMatch[1], opAssignMatch[2], opAssignMatch[3]], raw };
+    } else if (assignMatch) {
+        return { command: 'assign', args: [assignMatch[1], assignMatch[2]], raw };
+    }
+
     const match = raw.match(/^([a-z_][a-z0-9_\.]*)\s*(?:\(([^)]*)\))?$/i);
     if (!match) {
         return { error: `Neplatny prikaz na radku ${lineNumber}: ${raw}` };
@@ -788,9 +1033,13 @@ function handleEditorIndentation(event) {
     commandsEl.selectionEnd = selectedEnd + indent.length * lines.length;
 }
 
+
 function expandProgramLines(rawLines) {
     const functionDefs = new Map();
     const MAX_CALL_DEPTH = 80;
+    // --- Variable support ---
+    // We keep a global env for top-level assignments
+    const globalEnv = new Map();
 
     function splitArgs(argText) {
         const text = (argText || "").trim();
@@ -885,11 +1134,10 @@ function expandProgramLines(rawLines) {
             }
 
             if (token.type === "identifier") {
-                if (!env.has(token.value)) {
-                    return { ok: false, error: `Neznama promenna '${token.value}'.` };
-                }
+                // Pokud proměnná není v env, vracíme 0 (pro přiřazení to nevadí, pro použití je to default)
+                const val = env.has(token.value) ? env.get(token.value) : 0;
                 pos += 1;
-                return { ok: true, value: env.get(token.value) };
+                return { ok: true, value: val };
             }
 
             if (token.type === "operator" && token.value === "(") {
@@ -1088,13 +1336,58 @@ function expandProgramLines(rawLines) {
         return { ok: true, text: `${commandName}(${evaluated.join(", ")})` };
     }
 
-    function parseBlock(startIndex, indentLevel, env = new Map(), callStack = [], stopIndex = rawLines.length) {
+
+    function parseBlock(startIndex, indentLevel, env = new Map(globalEnv), callStack = [], stopIndex = rawLines.length) {
         const expanded = [];
+
 
         for (let i = startIndex; i < stopIndex; i += 1) {
             const line = rawLines[i];
             const raw = line.trim();
             if (!raw || raw.startsWith("#")) {
+                continue;
+            }
+
+            // Variable assignment: e.g. delka = 20, delka += 10, delka -= 5, delka *= 2, delka /= 3
+            const opAssignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*([+\-*/])=\s*(.+)$/);
+            const assignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
+            if (opAssignMatch) {
+                const varName = opAssignMatch[1];
+                const op = opAssignMatch[2];
+                const expr = opAssignMatch[3];
+                // Najdi hodnotu proměnné v env nebo globalEnv, pokud není, inicializuj na 0
+                let leftValue = env.has(varName) ? env.get(varName)
+                    : (globalEnv.has(varName) ? globalEnv.get(varName) : 0);
+                const rightEval = evaluateExpression(expr, env);
+                if (!rightEval.ok) {
+                    return { ok: false, error: `${rightEval.error} (radek ${i + 1})` };
+                }
+                let newValue;
+                if (op === '+') newValue = leftValue + rightEval.value;
+                else if (op === '-') newValue = leftValue - rightEval.value;
+                else if (op === '*') newValue = leftValue * rightEval.value;
+                else if (op === '/') {
+                    if (rightEval.value === 0) {
+                        return { ok: false, error: `Deleni nulou (radek ${i + 1})` };
+                    }
+                    newValue = leftValue / rightEval.value;
+                } else {
+                    return { ok: false, error: `Neznamy operator '${op}' (radek ${i + 1})` };
+                }
+                globalEnv.set(varName, newValue);
+                env.set(varName, newValue);
+                expanded.push({ text: raw, lineNumber: i + 1 });
+                continue;
+            } else if (assignMatch) {
+                const varName = assignMatch[1];
+                const expr = assignMatch[2];
+                const value = evaluateExpression(expr, env);
+                if (!value.ok) {
+                    return { ok: false, error: `${value.error} (radek ${i + 1})` };
+                }
+                globalEnv.set(varName, value.value);
+                env.set(varName, value.value);
+                expanded.push({ text: raw, lineNumber: i + 1 });
                 continue;
             }
 
@@ -1126,9 +1419,8 @@ function expandProgramLines(rawLines) {
 
                 const blockEnd = findBlockEnd(childStart, childIndent, stopIndex);
                 for (let r = 0; r < count; r += 1) {
-                    const loopEnv = new Map(env);
-                    loopEnv.set(loopVar, r);
-                    const nested = parseBlock(childStart, childIndent, loopEnv, callStack, blockEnd);
+                    env.set(loopVar, r);
+                    const nested = parseBlock(childStart, childIndent, env, callStack, blockEnd);
                     if (!nested.ok) {
                         return nested;
                     }
@@ -1302,7 +1594,7 @@ function expandProgramLines(rawLines) {
         return { ok: true, lines: expanded, nextIndex: stopIndex };
     }
 
-    const top = parseBlock(0, 0, new Map(), []);
+    const top = parseBlock(0, 0, new Map(globalEnv), []);
     if (!top.ok) {
         return top;
     }
@@ -1439,6 +1731,10 @@ function resetCanvas() {
 }
 
 function applyCommandToSimulation(simState, simSegments, command, args) {
+        // Ignore variable assignments in simulation
+        if (command === "assign" || command === "assign_op") {
+            return null;
+        }
     if (command === "forward" && args.length === 1) {
         const endX = simState.x + args[0] * Math.cos(toRadians(simState.angle));
         const endY = simState.y + args[0] * Math.sin(toRadians(simState.angle));
@@ -1574,6 +1870,10 @@ async function moveToAnimated(endX, endY) {
 }
 
 async function executeUserCommand(command, args) {
+        // Ignore variable assignments (already handled in expander)
+        if (command === "assign" || command === "assign_op") {
+            return null;
+        }
     if (cancelRequested) {
         return "__CANCELLED__";
     }
@@ -1661,6 +1961,9 @@ async function executeUserCommand(command, args) {
 
 function setButtonsDisabled(disabled) {
     drawBtn.disabled = disabled;
+    if (stepBtn) {
+        stepBtn.disabled = disabled;
+    }
     clearBtn.disabled = disabled;
     if (stopBtn) {
         stopBtn.disabled = !disabled;
@@ -1827,7 +2130,19 @@ function scheduleDraftSave() {
 
 function renderPatternMenu() {
     patternListEl.textContent = "";
+    const categories = [];
     for (const category of CATEGORY_ORDER) {
+        if (PATTERNS.some((pattern) => pattern.category === category)) {
+            categories.push(category);
+        }
+    }
+    for (const pattern of PATTERNS) {
+        if (!categories.includes(pattern.category)) {
+            categories.push(pattern.category);
+        }
+    }
+
+    for (const category of categories) {
         const categoryTitle = document.createElement("li");
         categoryTitle.className = "pattern-category";
         const toggle = document.createElement("button");
@@ -1908,18 +2223,19 @@ function loadPattern(patternId) {
 
     const pattern = PATTERNS.find((x) => x.id === patternId) || PATTERNS[0];
     selectedPatternId = pattern.id;
+    clearStepProgram();
     startTaskTimer(pattern.id);
     currentPatternEl.textContent = `Aktualni uloha: ${pattern.name}`;
 
     if (draftByPattern.has(pattern.id)) {
         commandsEl.value = draftByPattern.get(pattern.id) || "";
     } else {
-    const saved = progressByPattern.get(pattern.id);
+        const saved = progressByPattern.get(pattern.id);
         if (saved && typeof saved.solution_text === "string") {
-        commandsEl.value = saved.solution_text;
-    } else {
-        commandsEl.value = pattern.commands.slice(0, VISIBLE_SOLUTION_LINES).join("\n");
-    }
+            commandsEl.value = saved.solution_text;
+        } else {
+            commandsEl.value = getInitialSolverText(pattern);
+        }
     }
 
     if (pattern.hint) {
@@ -1944,6 +2260,7 @@ async function runCommands() {
         return;
     }
 
+    clearStepProgram();
     isRunning = true;
     cancelRequested = false;
     setButtonsDisabled(true);
@@ -1959,6 +2276,7 @@ async function runCommands() {
 
     for (let i = 0; i < expansion.lines.length; i += 1) {
         const source = expansion.lines[i];
+        highlightCommandLine(source.lineNumber);
         const parsed = parseCommand(source.text, source.lineNumber);
         if (parsed.skip) {
             continue;
@@ -1990,15 +2308,40 @@ async function runCommands() {
     const evaluation = evaluateDrawing();
     setResult(evaluation);
     logEl.textContent = `Hotovo. ${evaluation.reason}`;
-    await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
+    if (!IS_ADMIN_PREVIEW) {
+        await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
+    }
     renderPatternMenu();
 
     isRunning = false;
     setButtonsDisabled(false);
 }
 
+async function runSingleStep() {
+    if (isRunning) {
+        return;
+    }
+
+    const stepResult = await stepExecution();
+    if (!stepResult || stepResult.status !== "ok") {
+        return;
+    }
+
+    logEl.textContent = `Krok ${stepResult.step_index}/${stepResult.total_steps}`;
+}
+
 drawBtn.addEventListener("click", runCommands);
-clearBtn.addEventListener("click", resetCanvas);
+if (stepBtn) {
+    stepBtn.addEventListener("click", () => {
+        runSingleStep().catch(() => {
+            logEl.textContent = "Krokovani selhalo.";
+        });
+    });
+}
+clearBtn.addEventListener("click", () => {
+    clearStepProgram();
+    resetCanvas();
+});
 if (stopBtn) {
     stopBtn.addEventListener("click", requestCancel);
 }
@@ -2014,7 +2357,10 @@ if (hintToggleBtn) {
     });
 }
 commandsEl.addEventListener("keydown", handleEditorIndentation);
-commandsEl.addEventListener("input", scheduleDraftSave);
+commandsEl.addEventListener("input", () => {
+    clearStepProgram();
+    scheduleDraftSave();
+});
 window.addEventListener("beforeunload", () => {
     if (!isRunning) {
         persistCurrentDraft(true);
@@ -2036,14 +2382,28 @@ document.addEventListener("visibilitychange", () => {
 });
 
 async function initApp() {
+    applyAdminPreviewMode();
     loadHintUsage();
     loadProgressCache();
     loadDraftStorage();
     loadTimeStorage();
     initSpeedControl();
+    await loadPatternOverrides();
     await loadProgress();
+    const requestedPatternId = getPatternIdFromUrl();
+    if (requestedPatternId) {
+        selectedPatternId = requestedPatternId;
+    }
     renderPatternMenu();
     loadPattern(selectedPatternId);
+    if (IS_ADMIN_PREVIEW && SHOULD_AUTORUN) {
+        runCommands().catch(() => {
+            // Keep preview resilient even if draw fails.
+        });
+    }
+    if (IS_STEP_MODE) {
+        window.zelvaStep = stepExecution;
+    }
     ensureFooterTicker();
     updateFooterStats();
 }

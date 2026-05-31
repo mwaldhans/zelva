@@ -5,3 +5,4 @@ __pycache__/
 .vscode/
 src/instance/
 *.db
+src/zelva/wsgi.py

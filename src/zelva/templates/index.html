@@ -12,6 +12,7 @@
             <a class="school-brand" href="https://gymnzidlo.cz/" target="_blank" rel="noopener noreferrer">
                 <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnazium Zidlochovice">
             </a>
+            <a class="admin-link" href="{{ url_for('admin') }}">Administrace</a>
         </div>
     </header>
     <main class="layout">
@@ -37,6 +38,7 @@ left(90)
 forward(100)</textarea>
             <div class="actions">
                 <button id="drawBtn" type="button">Vykreslit</button>
+                <button id="stepBtn" type="button" class="secondary">Krokovat</button>
                 <button id="clearBtn" type="button" class="secondary">Vymazat</button>
                 <button id="stopBtn" type="button" class="danger" disabled>Prerusit</button>
             </div>

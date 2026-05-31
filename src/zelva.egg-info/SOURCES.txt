@@ -1,0 +1,13 @@
+README.md
+pyproject.toml
+src/zelva/__init__.py
+src/zelva/__main__.py
+src/zelva/app.py
+src/zelva/main.py
+src/zelva/wsgi.py
+src/zelva.egg-info/PKG-INFO
+src/zelva.egg-info/SOURCES.txt
+src/zelva.egg-info/dependency_links.txt
+src/zelva.egg-info/requires.txt
+src/zelva.egg-info/top_level.txt
+tests/test_main.py
