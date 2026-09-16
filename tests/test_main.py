@@ -1,4 +1,5 @@
 from pathlib import Path
+import sqlite3
 
 from zelva.app import create_app
 
@@ -76,3 +77,44 @@ def test_progress_is_isolated_per_browser_client(tmp_path: Path) -> None:
     assert load_a.status_code == 200
     assert len(load_a.json["items"]) == 1
     assert load_a.json["items"][0]["pattern_id"] == "square"
+
+
+def test_admin_patterns_persist_in_sqlite(tmp_path: Path) -> None:
+    app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "test.db")})
+    client = app.test_client()
+
+    with client.session_transaction() as session:
+        session["user"] = {"sub": "admin-1", "email": "waldhans.m@gymnzidlo.cz"}
+
+    override_response = client.put(
+        "/api/pattern-overrides/square",
+        json={"name": "Upraveny ctverec", "commands": ["forward(10)", "left(90)"]},
+    )
+
+    assert override_response.status_code == 200
+    assert override_response.json["override"]["name"] == "Upraveny ctverec"
+
+    custom_response = client.post(
+        "/api/custom-patterns",
+        json={
+            "id": "moje_uloha",
+            "name": "Moje uloha",
+            "category": "Testy",
+            "commands": ["forward(20)"],
+        },
+    )
+
+    assert custom_response.status_code == 201
+
+    connection = sqlite3.connect(str(tmp_path / "test.db"))
+    try:
+        tables = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+    finally:
+        connection.close()
+
+    assert {"pattern_overrides", "custom_patterns"}.issubset(tables)

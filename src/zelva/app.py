@@ -28,13 +28,13 @@ def _database_path(app: Flask) -> str:
 
 def _pattern_overrides_path(app: Flask) -> Path:
     configured_dir = app.config.get("DATA_DIR") or os.getenv("ZELVA_DATA_DIR")
-    base_dir = Path(configured_dir) if configured_dir else Path.home() / ".zelva"
+    base_dir = Path(configured_dir) if configured_dir else Path(app.instance_path)
     return base_dir / "pattern_overrides.json"
 
 
 def _custom_patterns_path(app: Flask) -> Path:
     configured_dir = app.config.get("DATA_DIR") or os.getenv("ZELVA_DATA_DIR")
-    base_dir = Path(configured_dir) if configured_dir else Path.home() / ".zelva"
+    base_dir = Path(configured_dir) if configured_dir else Path(app.instance_path)
     return base_dir / "custom_patterns.json"
 
 
@@ -88,7 +88,7 @@ def _clean_pattern_overrides(raw_overrides: object) -> dict[str, dict[str, objec
     return cleaned
 
 
-def _load_pattern_overrides(app: Flask) -> dict[str, dict[str, object]]:
+def _load_pattern_overrides_file(app: Flask) -> dict[str, dict[str, object]]:
     overrides_path = _pattern_overrides_path(app)
     if not overrides_path.exists():
         return {}
@@ -101,7 +101,7 @@ def _load_pattern_overrides(app: Flask) -> dict[str, dict[str, object]]:
     return _clean_pattern_overrides(raw_overrides)
 
 
-def _save_pattern_overrides(app: Flask, overrides: dict[str, dict[str, object]]) -> None:
+def _save_pattern_overrides_file(app: Flask, overrides: dict[str, dict[str, object]]) -> None:
     overrides_path = _pattern_overrides_path(app)
     overrides_path.parent.mkdir(parents=True, exist_ok=True)
     overrides_path.write_text(
@@ -110,7 +110,7 @@ def _save_pattern_overrides(app: Flask, overrides: dict[str, dict[str, object]])
     )
 
 
-def _load_custom_patterns(app: Flask) -> dict[str, dict[str, object]]:
+def _load_custom_patterns_file(app: Flask) -> dict[str, dict[str, object]]:
     path = _custom_patterns_path(app)
     if not path.exists():
         return {}
@@ -123,7 +123,7 @@ def _load_custom_patterns(app: Flask) -> dict[str, dict[str, object]]:
     return {pattern_id: pattern for pattern_id, pattern in raw.items() if isinstance(pattern_id, str) and isinstance(pattern, dict)}
 
 
-def _save_custom_patterns(app: Flask, patterns: dict[str, dict[str, object]]) -> None:
+def _save_custom_patterns_file(app: Flask, patterns: dict[str, dict[str, object]]) -> None:
     path = _custom_patterns_path(app)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(patterns, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -192,6 +192,78 @@ def _sanitize_pattern_override(payload: object) -> dict[str, object]:
             override["commands"] = command_lines
 
     return override
+
+
+def _pattern_from_row(row: sqlite3.Row) -> dict[str, object]:
+    pattern: dict[str, object] = {}
+    for key in ("category", "name", "hint", "initial_text"):
+        if row[key] is not None and row[key] != "":
+            pattern[key] = row[key]
+    if row["initial_lines"] is not None:
+        pattern["initial_lines"] = int(row["initial_lines"])
+    if row["commands_json"]:
+        pattern["commands"] = json.loads(row["commands_json"])
+    return pattern
+
+
+def _load_pattern_overrides(app: Flask) -> dict[str, dict[str, object]]:
+    rows = _get_db().execute(
+        "SELECT pattern_id, category, name, hint, initial_text, initial_lines, commands_json FROM pattern_overrides"
+    ).fetchall()
+    return {row["pattern_id"]: _pattern_from_row(row) for row in rows}
+
+
+def _save_pattern_overrides(app: Flask, overrides: dict[str, dict[str, object]]) -> None:
+    db = _get_db()
+    db.execute("DELETE FROM pattern_overrides")
+    for pattern_id, override in overrides.items():
+        db.execute(
+            """
+            INSERT INTO pattern_overrides
+                (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pattern_id,
+                override.get("category"),
+                override.get("name"),
+                override.get("hint"),
+                override.get("initial_text"),
+                override.get("initial_lines"),
+                json.dumps(override.get("commands"), ensure_ascii=False) if "commands" in override else None,
+            ),
+        )
+    db.commit()
+
+
+def _load_custom_patterns(app: Flask) -> dict[str, dict[str, object]]:
+    rows = _get_db().execute(
+        "SELECT pattern_id, category, name, hint, initial_text, initial_lines, commands_json FROM custom_patterns"
+    ).fetchall()
+    return {row["pattern_id"]: _pattern_from_row(row) for row in rows}
+
+
+def _save_custom_patterns(app: Flask, patterns: dict[str, dict[str, object]]) -> None:
+    db = _get_db()
+    db.execute("DELETE FROM custom_patterns")
+    for pattern_id, pattern in patterns.items():
+        db.execute(
+            """
+            INSERT INTO custom_patterns
+                (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pattern_id,
+                pattern.get("category"),
+                pattern.get("name"),
+                pattern.get("hint"),
+                pattern.get("initial_text"),
+                pattern.get("initial_lines"),
+                json.dumps(pattern.get("commands", []), ensure_ascii=False),
+            ),
+        )
+    db.commit()
 
 
 def _get_pattern_override(app: Flask, pattern_id: str) -> dict[str, object]:
@@ -289,6 +361,76 @@ def _init_db(app: Flask) -> None:
             ON user_progress (user_id, pattern_id)
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pattern_overrides (
+                pattern_id TEXT PRIMARY KEY,
+                category TEXT,
+                name TEXT,
+                hint TEXT,
+                initial_text TEXT,
+                initial_lines INTEGER,
+                commands_json TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS custom_patterns (
+                pattern_id TEXT PRIMARY KEY,
+                category TEXT NOT NULL,
+                name TEXT NOT NULL,
+                hint TEXT NOT NULL DEFAULT '',
+                initial_text TEXT NOT NULL DEFAULT '',
+                initial_lines INTEGER NOT NULL DEFAULT 2,
+                commands_json TEXT NOT NULL
+            )
+            """
+        )
+
+        override_count = conn.execute("SELECT COUNT(*) FROM pattern_overrides").fetchone()[0]
+        if override_count == 0:
+            for pattern_id, override in _load_pattern_overrides_file(app).items():
+                conn.execute(
+                    """
+                    INSERT INTO pattern_overrides
+                        (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        pattern_id,
+                        override.get("category"),
+                        override.get("name"),
+                        override.get("hint"),
+                        override.get("initial_text"),
+                        override.get("initial_lines"),
+                        json.dumps(override.get("commands"), ensure_ascii=False) if "commands" in override else None,
+                    ),
+                )
+
+        custom_count = conn.execute("SELECT COUNT(*) FROM custom_patterns").fetchone()[0]
+        if custom_count == 0:
+            for pattern_id, pattern in _load_custom_patterns_file(app).items():
+                sanitized = _sanitize_custom_pattern({"id": pattern_id, **pattern})
+                if sanitized is None:
+                    continue
+                _, clean_pattern = sanitized
+                conn.execute(
+                    """
+                    INSERT INTO custom_patterns
+                        (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        pattern_id,
+                        clean_pattern["category"],
+                        clean_pattern["name"],
+                        clean_pattern["hint"],
+                        clean_pattern["initial_text"],
+                        clean_pattern["initial_lines"],
+                        json.dumps(clean_pattern["commands"], ensure_ascii=False),
+                    ),
+                )
         conn.commit()
     finally:
         conn.close()

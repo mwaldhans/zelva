@@ -45,7 +45,9 @@ ADMIN_EMAIL=waldhans.m@gymnzidlo.cz
 
 Pri lokalnim spusteni muzete tyto hodnoty ulozit do souboru `.env` v koreni projektu (`d:\dvere\želva\.env`). Soubor je ignorovany Gitem. Po vytvoreni nebo zmene `.env` server restartujte.
 
-Postupy se po prihlaseni ukladaji v SQLite podle stabilniho Google identifikatoru uctu, takze jsou dostupne na dalsich zarizenich. Administrace a jeji API jsou pristupne pouze uctu `waldhans.m@gymnzidlo.cz`.
+Postupy se po prihlaseni ukladaji v SQLite podle stabilniho Google identifikatoru uctu, takze jsou dostupne na dalsich zarizenich. Prepisy uloh a vlastni ulohy z administrace se ukladaji do stejne SQLite databaze. Administrace a jeji API jsou pristupne pouze uctu `waldhans.m@gymnzidlo.cz`.
+
+Pro produkci nastavte `DATABASE` na trvaly soubor SQLite (napr. `/var/lib/zelva/zelva.db`) a zajistete, aby do jeho adresare mohl zapisovat uzivatel procesu Gunicorn. Stare soubory `pattern_overrides.json` a `custom_patterns.json` se pri prvnim spusteni jednorazove naimportuji, pokud jsou databazove tabulky prazdne.
 
 Volitelne muzete nastavit prostredi pro dev server:
 
