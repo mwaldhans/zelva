@@ -3,6 +3,7 @@ __pycache__/
 .pytest_cache/
 .venv/
 .vscode/
+.env
 src/instance/
 *.db
 src/zelva/wsgi.py

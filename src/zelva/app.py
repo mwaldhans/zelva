@@ -4,10 +4,19 @@ import json
 import os
 import re
 import sqlite3
+from functools import wraps
 from pathlib import Path
 from uuid import uuid4
 
-from flask import Flask, current_app, g, jsonify, render_template, request
+from authlib.integrations.flask_client import OAuth
+from dotenv import load_dotenv
+from flask import Flask, current_app, g, jsonify, redirect, render_template, request, session, url_for
+
+
+LOGIN_DOMAIN = "gymnzidlo.cz"
+DEFAULT_ADMIN_EMAIL = "waldhans.m@gymnzidlo.cz"
+
+load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 
 def _database_path(app: Flask) -> str:
@@ -21,6 +30,12 @@ def _pattern_overrides_path(app: Flask) -> Path:
     configured_dir = app.config.get("DATA_DIR") or os.getenv("ZELVA_DATA_DIR")
     base_dir = Path(configured_dir) if configured_dir else Path.home() / ".zelva"
     return base_dir / "pattern_overrides.json"
+
+
+def _custom_patterns_path(app: Flask) -> Path:
+    configured_dir = app.config.get("DATA_DIR") or os.getenv("ZELVA_DATA_DIR")
+    base_dir = Path(configured_dir) if configured_dir else Path.home() / ".zelva"
+    return base_dir / "custom_patterns.json"
 
 
 def _pattern_ids_from_source() -> list[str]:
@@ -95,6 +110,51 @@ def _save_pattern_overrides(app: Flask, overrides: dict[str, dict[str, object]])
     )
 
 
+def _load_custom_patterns(app: Flask) -> dict[str, dict[str, object]]:
+    path = _custom_patterns_path(app)
+    if not path.exists():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {pattern_id: pattern for pattern_id, pattern in raw.items() if isinstance(pattern_id, str) and isinstance(pattern, dict)}
+
+
+def _save_custom_patterns(app: Flask, patterns: dict[str, dict[str, object]]) -> None:
+    path = _custom_patterns_path(app)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(patterns, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _sanitize_custom_pattern(payload: object) -> tuple[str, dict[str, object]] | None:
+    if not isinstance(payload, dict):
+        return None
+    pattern_id = str(payload.get("id", "")).strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{2,48}", pattern_id):
+        return None
+    name = str(payload.get("name", "")).strip()
+    category = str(payload.get("category", "")).strip()
+    commands = payload.get("commands")
+    if not name or not category or not isinstance(commands, list) or not commands or not all(isinstance(item, str) for item in commands):
+        return None
+    try:
+        initial_lines = max(1, int(payload.get("initial_lines", 2)))
+    except (TypeError, ValueError):
+        initial_lines = 2
+    pattern: dict[str, object] = {
+        "category": category,
+        "name": name,
+        "hint": str(payload.get("hint", "")).strip(),
+        "commands": [item.rstrip() for item in commands],
+        "initial_lines": initial_lines,
+        "initial_text": str(payload.get("initial_text", "")).strip(),
+    }
+    return pattern_id, pattern
+
+
 def _sanitize_pattern_override(payload: object) -> dict[str, object]:
     if not isinstance(payload, dict):
         return {}
@@ -163,6 +223,48 @@ def _close_db(_: object = None) -> None:
         db.close()
 
 
+def _google_client(app: Flask):
+    oauth = OAuth(app)
+    client_id = app.config.get("GOOGLE_CLIENT_ID") or os.getenv("GOOGLE_CLIENT_ID")
+    client_secret = app.config.get("GOOGLE_CLIENT_SECRET") or os.getenv("GOOGLE_CLIENT_SECRET")
+    if not client_id or not client_secret:
+        return None
+    return oauth.register(
+        name="google",
+        client_id=client_id,
+        client_secret=client_secret,
+        server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
+        client_kwargs={"scope": "openid email profile", "hd": LOGIN_DOMAIN},
+    )
+
+
+def _current_user() -> dict[str, str] | None:
+    user = session.get("user")
+    return user if isinstance(user, dict) else None
+
+
+def _is_admin(user: dict[str, str] | None) -> bool:
+    admin_email = current_app.config.get("ADMIN_EMAIL") or os.getenv("ADMIN_EMAIL", DEFAULT_ADMIN_EMAIL)
+    return bool(user and user.get("email", "").lower() == admin_email.lower())
+
+
+def _admin_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        user = _current_user()
+        if user is None:
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Přihlášení je povinné."}), 401
+            return redirect(url_for("login", next=request.full_path))
+        if not _is_admin(user):
+            if request.path.startswith("/api/"):
+                return jsonify({"error": "Nemáte oprávnění správce."}), 403
+            return "Přístup do administrace je povolen pouze správci.", 403
+        return view(*args, **kwargs)
+
+    return wrapped
+
+
 def _init_db(app: Flask) -> None:
     db_path = Path(_database_path(app))
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -194,12 +296,26 @@ def _init_db(app: Flask) -> None:
 
 def create_app(test_config: dict | None = None) -> Flask:
     app = Flask(__name__)
+    app.config.from_mapping(
+        SECRET_KEY=os.getenv("SECRET_KEY", "dev-only-change-me"),
+        ADMIN_EMAIL=os.getenv("ADMIN_EMAIL", DEFAULT_ADMIN_EMAIL),
+    )
     if test_config:
         app.config.update(test_config)
 
+    google = _google_client(app)
     Path(app.instance_path).mkdir(parents=True, exist_ok=True)
     _init_db(app)
     app.teardown_appcontext(_close_db)
+
+    @app.before_request
+    def require_login() -> object | None:
+        public_endpoints = {"login", "login_google", "auth_callback", "logout", "health", "static"}
+        if request.endpoint in public_endpoints or _current_user() is not None:
+            return None
+        if request.path.startswith("/api/"):
+            return jsonify({"error": "Přihlášení je povinné."}), 401
+        return redirect(url_for("login", next=request.full_path))
 
     @app.before_request
     def ensure_browser_user() -> None:
@@ -224,6 +340,54 @@ def create_app(test_config: dict | None = None) -> Flask:
             )
         return response
 
+    @app.get("/login")
+    def login():
+        if _current_user() is not None:
+            return redirect(request.args.get("next") or url_for("index"))
+        if google is None:
+            return render_template("login.html", google_configured=False), 503
+        next_url = request.args.get("next") or url_for("index")
+        session["login_next"] = next_url if next_url.startswith("/") else url_for("index")
+        return render_template("login.html", google_configured=True)
+
+    @app.get("/login/google")
+    def login_google():
+        if google is None:
+            return redirect(url_for("login"))
+        next_url = request.args.get("next") or url_for("index")
+        session["login_next"] = next_url if next_url.startswith("/") else url_for("index")
+        return google.authorize_redirect(url_for("auth_callback", _external=True))
+
+    @app.get("/auth/callback")
+    def auth_callback():
+        if google is None:
+            return "Google přihlášení není nakonfigurované.", 503
+        token = google.authorize_access_token()
+        userinfo = token.get("userinfo") or google.userinfo()
+        email = str(userinfo.get("email", "")).strip().lower()
+        subject = str(userinfo.get("sub", "")).strip()
+        if not email.endswith(f"@{LOGIN_DOMAIN}") or not subject or not userinfo.get("email_verified", False):
+            session.clear()
+            return "Přihlásit se mohou pouze ověřené účty z domény gymnzidlo.cz.", 403
+
+        session["user"] = {
+            "sub": subject,
+            "email": email,
+            "name": str(userinfo.get("name", "")).strip(),
+            "picture": str(userinfo.get("picture", "")).strip(),
+        }
+        return redirect(session.pop("login_next", url_for("index")))
+
+    @app.get("/logout")
+    def logout():
+        session.clear()
+        return redirect(url_for("index"))
+
+    @app.context_processor
+    def inject_auth_state():
+        user = _current_user()
+        return {"current_user": user, "current_user_is_admin": _is_admin(user)}
+
     @app.get("/")
     def index() -> str:
         return render_template("index.html")
@@ -233,11 +397,13 @@ def create_app(test_config: dict | None = None) -> Flask:
         return render_template("sandbox.html")
 
     @app.get("/admin")
+    @_admin_required
     def admin() -> str:
         overrides = _load_pattern_overrides(app)
+        custom_patterns = _load_custom_patterns(app)
         return render_template(
             "admin.html",
-            pattern_ids=_admin_pattern_ids(),
+            pattern_ids=_admin_pattern_ids() + [pattern_id for pattern_id in custom_patterns if pattern_id not in _admin_pattern_ids()],
             overrides_json=json.dumps(overrides, ensure_ascii=False, indent=2),
         )
 
@@ -247,13 +413,29 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/api/pattern-overrides")
     def get_pattern_overrides() -> tuple[dict[str, dict[str, dict[str, object]]], int]:
-        return jsonify({"overrides": _load_pattern_overrides(app)}), 200
+        return jsonify({"overrides": _load_pattern_overrides(app), "custom_patterns": _load_custom_patterns(app)}), 200
+
+    @app.post("/api/custom-patterns")
+    @_admin_required
+    def create_custom_pattern() -> tuple[dict[str, object], int]:
+        sanitized = _sanitize_custom_pattern(request.get_json(silent=True) or {})
+        if sanitized is None:
+            return jsonify({"error": "Vyplň platné ID, název, kategorii a alespoň jeden příkaz."}), 400
+        pattern_id, pattern = sanitized
+        if pattern_id in _pattern_ids_from_source() or pattern_id in _load_custom_patterns(app):
+            return jsonify({"error": "Úloha s tímto ID už existuje."}), 409
+        patterns = _load_custom_patterns(app)
+        patterns[pattern_id] = pattern
+        _save_custom_patterns(app, patterns)
+        return jsonify({"pattern_id": pattern_id, "pattern": pattern}), 201
 
     @app.get("/api/pattern-overrides/<pattern_id>")
+    @_admin_required
     def get_pattern_override(pattern_id: str) -> tuple[dict[str, object], int]:
         return jsonify({"pattern_id": pattern_id, "override": _get_pattern_override(app, pattern_id)}), 200
 
     @app.put("/api/pattern-overrides/<pattern_id>")
+    @_admin_required
     def update_pattern_override(pattern_id: str) -> tuple[dict[str, object], int]:
         payload = request.get_json(silent=True) or {}
         override = _sanitize_pattern_override(payload)
@@ -261,11 +443,13 @@ def create_app(test_config: dict | None = None) -> Flask:
         return jsonify({"pattern_id": pattern_id, "override": override}), 200
 
     @app.delete("/api/pattern-overrides/<pattern_id>")
+    @_admin_required
     def delete_pattern_override(pattern_id: str) -> tuple[dict[str, object], int]:
         _store_pattern_override(app, pattern_id, {})
         return jsonify({"pattern_id": pattern_id, "override": {}}), 200
 
     @app.put("/api/pattern-overrides")
+    @_admin_required
     def update_pattern_overrides() -> tuple[dict[str, dict[str, dict[str, object]]], int]:
         payload = request.get_json(silent=True) or {}
         raw_overrides = payload.get("overrides", payload)
@@ -274,12 +458,14 @@ def create_app(test_config: dict | None = None) -> Flask:
         return jsonify({"overrides": overrides}), 200
 
     @app.delete("/api/pattern-overrides")
+    @_admin_required
     def delete_pattern_overrides() -> tuple[dict[str, dict[str, dict[str, object]]], int]:
         _save_pattern_overrides(app, {})
         return jsonify({"overrides": {}}), 200
 
     @app.get("/api/progress")
     def get_progress() -> tuple[dict[str, list[dict[str, object]]], int]:
+        user_id = session.get("user", {}).get("sub", g.browser_user_id)
         db = _get_db()
         rows = db.execute(
             """
@@ -288,7 +474,7 @@ def create_app(test_config: dict | None = None) -> Flask:
             WHERE user_id = ?
             ORDER BY pattern_id
             """,
-            (g.browser_user_id,),
+            (user_id,),
         ).fetchall()
         items = [
             {
@@ -320,7 +506,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 score = excluded.score,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (g.browser_user_id, pattern_id, solution_text, int(solved), score),
+            (session.get("user", {}).get("sub", g.browser_user_id), pattern_id, solution_text, int(solved), score),
         )
         db.commit()
 

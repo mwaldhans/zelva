@@ -8,7 +8,8 @@ def test_home_page_is_available() -> None:
     client = app.test_client()
     response = client.get("/")
 
-    assert response.status_code == 200
+    assert response.status_code == 302
+    assert response.location.startswith("/login")
 
 
 def test_health_api_is_available() -> None:
@@ -23,6 +24,9 @@ def test_health_api_is_available() -> None:
 def test_progress_api_persists_solution(tmp_path: Path) -> None:
     app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "test.db")})
     client = app.test_client()
+
+    with client.session_transaction() as session:
+        session["user"] = {"sub": "student-1", "email": "student@gymnzidlo.cz"}
 
     save_response = client.put(
         "/api/progress/square",
@@ -48,6 +52,11 @@ def test_progress_is_isolated_per_browser_client(tmp_path: Path) -> None:
     app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "test.db")})
     client_a = app.test_client()
     client_b = app.test_client()
+
+    with client_a.session_transaction() as session:
+        session["user"] = {"sub": "student-a", "email": "a@gymnzidlo.cz"}
+    with client_b.session_transaction() as session:
+        session["user"] = {"sub": "student-b", "email": "b@gymnzidlo.cz"}
 
     response_a = client_a.put(
         "/api/progress/square",

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Přihlášení | Želví grafika</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body class="login-page">
+    <main class="login-main">
+        <section class="login-panel" aria-labelledby="loginTitle">
+            <img class="login-logo" src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnázium Židlochovice">
+            <h1 id="loginTitle">Přihlášení do aplikace</h1>
+            <p class="login-intro">Pro přístup do systému je vyžadováno přihlášení pomocí školního Google účtu s doménou <strong>@gymnzidlo.cz</strong>.</p>
+
+            {% if google_configured %}
+                <a class="google-login-button" href="{{ url_for('login_google', next=request.args.get('next', '')) }}">
+                    <img class="google-icon" src="{{ url_for('static', filename='img/google.svg') }}" alt="">
+                    <span>Přihlásit přes Google</span>
+                </a>
+            {% else %}
+                <div class="login-error" role="alert">
+                    Přihlášení Google není nakonfigurované. Doplň údaje do souboru <code>.env</code> a restartuj server.
+                </div>
+            {% endif %}
+        </section>
+    </main>
+
+    <footer class="app-footer login-footer">
+        <span class="footer-owner">© 2026 Marek Waldhans</span>
+    </footer>
+</body>
+</html>

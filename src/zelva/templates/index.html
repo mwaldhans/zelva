@@ -15,7 +15,8 @@
             <nav class="site-nav" aria-label="Hlavni menu">
                 <a class="site-nav-link active" href="{{ url_for('index') }}">Ulohy</a>
                 <a class="site-nav-link" href="{{ url_for('sandbox') }}">Piskoviste</a>
-                <a class="site-nav-link" href="{{ url_for('admin') }}">Administrace</a>
+                {% if current_user_is_admin %}<a class="site-nav-link" href="{{ url_for('admin') }}">Administrace</a>{% endif %}
+                {% if current_user %}<a class="site-nav-link" href="{{ url_for('logout') }}">Odhlasit {{ current_user.email }}</a>{% else %}<a class="site-nav-link" href="{{ url_for('login') }}">Prihlasit přes Google</a>{% endif %}
             </nav>
         </div>
     </header>
@@ -54,6 +55,7 @@ forward(100)</textarea>
             </div>
             <p id="result" class="result" aria-live="polite"></p>
             <p class="hint">Python turtle příkazy: forward/fd, backward/bk, left/lt, right/rt, penup/pu, pendown/pd, goto/setpos, setheading/seth, home, for i in range(n):, def funkce(): a volání funkce().</p>
+            <p class="hint">Modulo příklady: left(360 % 7), krok = 20 + i % 4, delka %= 3, if i % 2 == 0:, right((i * 15) % 360).</p>
             <p class="hint">Řešení se ukládá automaticky po vykreslení.</p>
             <pre id="log" aria-live="polite"></pre>
         </section>

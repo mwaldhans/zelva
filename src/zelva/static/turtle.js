@@ -33,7 +33,7 @@ const DRAFT_STORAGE_KEY = "zelva_code_drafts_v1";
 const PROGRESS_STORAGE_KEY = "zelva_progress_cache_v1";
 const TIME_STORAGE_KEY = "zelva_time_spent_v1";
 
-const CATEGORY_ORDER = ["Základy", "Opakování", "Vzory", "Fraktály", "Funkce"];
+const CATEGORY_ORDER = ["Základy", "Opakování", "Vzory", "Fraktály", "Funkce", "Modulo"];
 
 const PATTERNS = [
     { id: "square", category: "Základy", name: "1. Čtverec", hint: "Čtverec má 4 stejné strany a 4 pravé úhly. Otoč se 4x o 90 stupňů.", commands: ["forward(100)", "left(90)", "forward(100)", "left(90)", "forward(100)", "left(90)", "forward(100)"] },
@@ -225,6 +225,11 @@ const PATTERNS = [
     { id: "fractal_tree", category: "Fraktály", name: "23. Strom (větve se půlí)", hint: "Strom: jdi rovně (kmen), pak odboč vlevo a kresli menší větev, vrať se, odboč vpravo a kresli druhou větev, vrať se. S každou úrovní se délka půlí.", commands: ["left(90)", "forward(200)", "left(30)", "forward(100)", "left(28)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "right(56)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "left(28)", "backward(100)", "right(60)", "forward(100)", "left(28)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "right(56)", "forward(50)", "left(25)", "forward(25)", "backward(25)", "right(50)", "forward(25)", "backward(25)", "left(25)", "backward(50)", "left(28)", "backward(100)", "left(30)", "backward(200)"] },
     { id: "sierpinski_hint", category: "Fraktály", name: "24. Sierpińského styl (úroveň 4)", hint: "Sierpinski: trojúhelník rozdělený na menší trojúhelníky. Každá úroveň má poloviční stranu. Použij goto() pro přesun na správnou pozici.", commands: ["# Sierpinski styl: 4 velikosti trojuhelniku", "for lvl1 in range(3):", "    forward(150)", "    left(120)", "for lvl2 in range(3):", "    forward(75)", "    left(120)", "penup()", "goto(322, 262)", "pendown()", "for lvl3 in range(3):", "    forward(38)", "    left(120)", "penup()", "goto(341, 273)", "pendown()", "for lvl4 in range(3):", "    forward(19)", "    left(120)", "penup()", "goto(379, 273)", "pendown()", "for lvl4b in range(3):", "    forward(19)", "    left(120)", "penup()", "goto(360, 240)", "pendown()", "for lvl3b in range(3):", "    forward(38)", "    left(120)"] },
     { id: "polygon_function", category: "Funkce", name: "25. Funkce: polygon", hint: "Definuj funkci def polygon(): s cyklem uvnitř, pak ji zavolej. Funkce sdruží opakující se kroky do jednoho celku, který můžeš volat vícekrát.", commands: ["def polygon():", "    for i in range(6):", "        forward(70)", "        left(60)", "", "polygon()"] },
+    { id: "modulo_angle", category: "Modulo", name: "26. Modulo: uhel ze zbytku", hint: "Pouzij zbytek po deleni jako uhel. Vyzkousej, jak se meni smer pri i % 7.", commands: ["for i in range(21):", "    left(360 % 7)", "    forward(35)"] },
+    { id: "modulo_alternate_turn", category: "Modulo", name: "27. Modulo: stridani vlevo vpravo", hint: "i % 2 je 0 nebo 1. Tim rozhodnes, jestli zatocit vlevo nebo vpravo.", commands: ["for i in range(18):", "    if i % 2 == 0:", "        left(90)", "    else:", "        right(90)", "    forward(40)"] },
+    { id: "modulo_length", category: "Modulo", name: "28. Modulo: periodicka delka", hint: "Delka se opakuje po 4 krocich. Pouzij i % 4 pro periodu 0,1,2,3.", commands: ["for i in range(20):", "    forward(25 + (i % 4) * 12)", "    left(88)"] },
+    { id: "modulo_assign", category: "Modulo", name: "29. Modulo: operator %=", hint: "Pouzij %= pro periodicke resetovani hodnoty. Kdyz delka dosahne nasobku 3, vrati se do maleho rozsahu.", commands: ["delka = 50", "for i in range(16):", "    forward(delka)", "    right(95)", "    delka += 5", "    delka %= 60", "    delka += 20"] },
+    { id: "modulo_checker", category: "Modulo", name: "30. Modulo: suda a licha vetev", hint: "Kombinace podminky a modulo: sude kroky kresli jinam nez liche.", commands: ["for i in range(24):", "    if i % 2 == 0:", "        left(60)", "        forward(45)", "    else:", "        right(120)", "        forward(30)"] },
 ];
 
 function createAutoPattern(patternNumber) {
@@ -366,6 +371,26 @@ function applyPatternOverrides(overrides) {
     }
 }
 
+function applyCustomPatterns(customPatterns) {
+    if (!customPatterns || typeof customPatterns !== "object") {
+        return;
+    }
+    for (const [id, pattern] of Object.entries(customPatterns)) {
+        if (!pattern || typeof pattern !== "object" || PATTERNS.some((item) => item.id === id)) {
+            continue;
+        }
+        PATTERNS.push({
+            id,
+            category: typeof pattern.category === "string" ? pattern.category : "Vlastní",
+            name: typeof pattern.name === "string" ? pattern.name : id,
+            hint: typeof pattern.hint === "string" ? pattern.hint : "",
+            commands: Array.isArray(pattern.commands) ? pattern.commands : [],
+            initial_lines: Number(pattern.initial_lines) || 2,
+            initial_text: typeof pattern.initial_text === "string" ? pattern.initial_text : "",
+        });
+    }
+}
+
 function getInitialLinesCount(pattern) {
     const configured = Number(pattern.initial_lines);
     if (Number.isFinite(configured) && configured > 0) {
@@ -437,6 +462,7 @@ async function loadPatternOverrides() {
         }
 
         const payload = await response.json();
+        applyCustomPatterns(payload.custom_patterns || {});
         applyPatternOverrides(payload.overrides || {});
     } catch (_) {
         // Ignore missing admin overrides.
@@ -981,8 +1007,8 @@ function parseCommand(rawLine, lineNumber) {
         return { skip: true };
     }
 
-    // Assignment: delka = 20, delka += 10, delka -= 5, delka *= 2, delka /= 3
-    const opAssignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*([+\-*/])=\s*(.+)$/);
+    // Assignment: delka = 20, delka += 10, delka -= 5, delka *= 2, delka /= 3, delka %= 3
+    const opAssignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*([+\-*/%])=\s*(.+)$/);
     const assignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
     if (opAssignMatch) {
         return { command: 'assign_op', args: [opAssignMatch[1], opAssignMatch[2], opAssignMatch[3]], raw };
@@ -1192,7 +1218,7 @@ function expandProgramLines(rawLines) {
                 i = j;
                 continue;
             }
-            if ("+-*/()".includes(ch)) {
+            if ("+-*/%()".includes(ch)) {
                 tokens.push({ type: "operator", value: ch });
                 i += 1;
                 continue;
@@ -1265,7 +1291,7 @@ function expandProgramLines(rawLines) {
             }
             while (true) {
                 const token = tokens[pos];
-                if (!token || token.type !== "operator" || (token.value !== "*" && token.value !== "/")) {
+                if (!token || token.type !== "operator" || (token.value !== "*" && token.value !== "/" && token.value !== "%")) {
                     return left;
                 }
                 pos += 1;
@@ -1273,10 +1299,16 @@ function expandProgramLines(rawLines) {
                 if (!right.ok) {
                     return right;
                 }
-                if (token.value === "/" && right.value === 0) {
-                    return { ok: false, error: "Deleni nulou." };
+                if ((token.value === "/" || token.value === "%") && right.value === 0) {
+                    return { ok: false, error: token.value === "/" ? "Deleni nulou." : "Modulo nulou." };
                 }
-                left = { ok: true, value: token.value === "*" ? left.value * right.value : left.value / right.value };
+                if (token.value === "*") {
+                    left = { ok: true, value: left.value * right.value };
+                } else if (token.value === "/") {
+                    left = { ok: true, value: left.value / right.value };
+                } else {
+                    left = { ok: true, value: left.value % right.value };
+                }
             }
         }
 
@@ -1436,8 +1468,8 @@ function expandProgramLines(rawLines) {
                 continue;
             }
 
-            // Variable assignment: e.g. delka = 20, delka += 10, delka -= 5, delka *= 2, delka /= 3
-            const opAssignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*([+\-*/])=\s*(.+)$/);
+            // Variable assignment: e.g. delka = 20, delka += 10, delka -= 5, delka *= 2, delka /= 3, delka %= 3
+            const opAssignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*([+\-*/%])=\s*(.+)$/);
             const assignMatch = raw.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*(.+)$/);
             if (opAssignMatch) {
                 const varName = opAssignMatch[1];
@@ -1454,6 +1486,12 @@ function expandProgramLines(rawLines) {
                 if (op === '+') newValue = leftValue + rightEval.value;
                 else if (op === '-') newValue = leftValue - rightEval.value;
                 else if (op === '*') newValue = leftValue * rightEval.value;
+                else if (op === '%') {
+                    if (rightEval.value === 0) {
+                        return { ok: false, error: `Modulo nulou (radek ${i + 1})` };
+                    }
+                    newValue = leftValue % rightEval.value;
+                }
                 else if (op === '/') {
                     if (rightEval.value === 0) {
                         return { ok: false, error: `Deleni nulou (radek ${i + 1})` };

@@ -26,6 +26,27 @@ python -m zelva
 
 Pak otevrite `http://127.0.0.1:5000`.
 
+## Google prihlaseni
+
+Pro prihlaseni vytvorte v Google Cloud OAuth 2.0 Web Client a jako autorizovany redirect URI nastavte:
+
+```text
+https://python.gymnzidlo.cz/auth/callback
+```
+
+Aplikace prijima pouze overene Google ucty s adresou `@gymnzidlo.cz`. Nastavte produkcni promenne:
+
+```text
+SECRET_KEY=<nahodny dlouhy retezec>
+GOOGLE_CLIENT_ID=<Google Client ID>
+GOOGLE_CLIENT_SECRET=<Google Client Secret>
+ADMIN_EMAIL=waldhans.m@gymnzidlo.cz
+```
+
+Pri lokalnim spusteni muzete tyto hodnoty ulozit do souboru `.env` v koreni projektu (`d:\dvere\želva\.env`). Soubor je ignorovany Gitem. Po vytvoreni nebo zmene `.env` server restartujte.
+
+Postupy se po prihlaseni ukladaji v SQLite podle stabilniho Google identifikatoru uctu, takze jsou dostupne na dalsich zarizenich. Administrace a jeji API jsou pristupne pouze uctu `waldhans.m@gymnzidlo.cz`.
+
 Volitelne muzete nastavit prostredi pro dev server:
 
 ```bash

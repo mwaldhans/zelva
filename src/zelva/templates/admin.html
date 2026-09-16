@@ -16,6 +16,7 @@
                 <a class="site-nav-link" href="{{ url_for('index') }}">Ulohy</a>
                 <a class="site-nav-link" href="{{ url_for('sandbox') }}">Piskoviste</a>
                 <a class="site-nav-link active" href="{{ url_for('admin') }}">Administrace</a>
+                <a class="site-nav-link" href="{{ url_for('logout') }}">Odhlasit {{ current_user.email }}</a>
             </nav>
         </div>
     </header>
@@ -38,6 +39,16 @@
                     {% endfor %}
                 </div>
             </div>
+            <form id="newTaskForm" class="new-task-form">
+                <h2>Nová úloha</h2>
+                <input id="newTaskId" type="text" required pattern="[a-z][a-z0-9_-]{2,48}" placeholder="ID, např. spirala_1">
+                <input id="newTaskName" type="text" required placeholder="Název úlohy">
+                <input id="newTaskCategory" type="text" required placeholder="Kategorie">
+                <textarea id="newTaskHint" rows="3" placeholder="Nápověda (volitelné)"></textarea>
+                <textarea id="newTaskCommands" rows="6" required placeholder="Jeden příkaz na řádek"></textarea>
+                <button type="submit">Přidat úlohu</button>
+                <p id="newTaskStatus" class="admin-status" aria-live="polite"></p>
+            </form>
         </section>
 
         <section class="panel admin-editor">
@@ -129,10 +140,17 @@
         const resetBtn = document.getElementById("resetBtn");
         const saveBtn = document.getElementById("saveBtn");
         const previewFrame = document.getElementById("previewFrame");
+        const newTaskForm = document.getElementById("newTaskForm");
+        const newTaskStatus = document.getElementById("newTaskStatus");
 
         let selectedPatternId = patternButtons[0]?.dataset.patternId || "";
         let overridesByPattern = {};
         let basePatternsById = {};
+
+        function setNewTaskStatus(message, kind = "") {
+            newTaskStatus.textContent = message;
+            newTaskStatus.className = kind ? `admin-status ${kind}` : "admin-status";
+        }
 
         function setStatus(message, kind = "") {
             adminStatusEl.textContent = message;
@@ -456,6 +474,7 @@
 
             const payload = await response.json();
             overridesByPattern = payload.overrides || {};
+            Object.assign(basePatternsById, payload.custom_patterns || {});
             updatePatternSelect();
             updateTaskList();
         }
@@ -582,6 +601,33 @@
         });
 
         taskFilterEl.addEventListener("input", updateTaskList);
+
+        newTaskForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            setNewTaskStatus("Ukládám úlohu...");
+            const payload = {
+                id: document.getElementById("newTaskId").value,
+                name: document.getElementById("newTaskName").value,
+                category: document.getElementById("newTaskCategory").value,
+                hint: document.getElementById("newTaskHint").value,
+                commands: document.getElementById("newTaskCommands").value.split(/\r?\n/u),
+            };
+            try {
+                const response = await fetch("/api/custom-patterns", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.error || "Úlohu se nepodařilo uložit.");
+                }
+                setNewTaskStatus("Úloha přidána.", "ok");
+                window.location.reload();
+            } catch (error) {
+                setNewTaskStatus(error.message, "bad");
+            }
+        });
 
         adminForm.addEventListener("submit", async (event) => {
             event.preventDefault();
