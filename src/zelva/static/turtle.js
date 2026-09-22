@@ -2200,6 +2200,7 @@ async function saveProgress(patternId, solutionText, solved, score) {
     try {
         const response = await fetch(`/api/progress/${encodeURIComponent(patternId)}`, {
             method: "PUT",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 solution_text: solutionText,
@@ -2208,14 +2209,16 @@ async function saveProgress(patternId, solutionText, solved, score) {
                 time_seconds: getTaskElapsedSeconds(patternId),
             }),
         });
-        if (response.ok) {
-            const saved = await response.json();
-            progressByPattern.set(patternId, saved);
-            saveProgressCache();
-            updateFooterStats();
+        if (!response.ok) {
+            const errorPayload = await response.json().catch(() => ({}));
+            throw new Error(errorPayload.error || `Uložení selhalo (${response.status}).`);
         }
-    } catch (_) {
-        // Keep optimistic local state if backend temporarily unavailable.
+        const saved = await response.json();
+        progressByPattern.set(patternId, saved);
+        saveProgressCache();
+        updateFooterStats();
+    } catch (error) {
+        logEl.textContent = `Řešení se nepodařilo uložit na server: ${error.message || "neznámá chyba"}`;
     }
 }
 
