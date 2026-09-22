@@ -359,6 +359,11 @@ function applyPatternOverrides(overrides) {
         if (typeof override.initial_text === "string") {
             pattern.initial_text = override.initial_text;
         }
+        for (const key of ["start_x", "start_y", "start_angle"]) {
+            if (Number.isFinite(Number(override[key]))) {
+                pattern[key] = Number(override[key]);
+            }
+        }
         if (Number.isFinite(Number(override.initial_lines))) {
             const safeLines = Math.floor(Number(override.initial_lines));
             if (safeLines > 0) {
@@ -387,7 +392,22 @@ function applyCustomPatterns(customPatterns) {
             commands: Array.isArray(pattern.commands) ? pattern.commands : [],
             initial_lines: Number(pattern.initial_lines) || 2,
             initial_text: typeof pattern.initial_text === "string" ? pattern.initial_text : "",
+            start_x: Number.isFinite(Number(pattern.start_x)) ? Number(pattern.start_x) : undefined,
+            start_y: Number.isFinite(Number(pattern.start_y)) ? Number(pattern.start_y) : undefined,
+            start_angle: Number.isFinite(Number(pattern.start_angle)) ? Number(pattern.start_angle) : undefined,
         });
+    }
+}
+
+function applyDeletedPatterns(deletedPatterns) {
+    if (!Array.isArray(deletedPatterns) || deletedPatterns.length === 0) {
+        return;
+    }
+    const deletedIds = new Set(deletedPatterns);
+    for (let index = PATTERNS.length - 1; index >= 0; index -= 1) {
+        if (deletedIds.has(PATTERNS[index].id)) {
+            PATTERNS.splice(index, 1);
+        }
     }
 }
 
@@ -404,6 +424,10 @@ function getInitialSolverText(pattern) {
         return pattern.initial_text;
     }
     return pattern.commands.slice(0, getInitialLinesCount(pattern)).join("\n");
+}
+
+function getLearnerPatternName(pattern) {
+    return String(pattern?.name || pattern?.id || "").replace(/^\s*\d+\.\s*/u, "").trim();
 }
 
 function getPatternIdFromUrl() {
@@ -462,6 +486,7 @@ async function loadPatternOverrides() {
         }
 
         const payload = await response.json();
+        applyDeletedPatterns(payload.deleted_patterns || []);
         applyCustomPatterns(payload.custom_patterns || {});
         applyPatternOverrides(payload.overrides || {});
     } catch (_) {
@@ -469,6 +494,7 @@ async function loadPatternOverrides() {
     }
 }
 
+let currentPatternForState = null;
 const state = createInitialState();
 const segments = [];
 const progressByPattern = new Map();
@@ -862,11 +888,16 @@ function restoreState(saved) {
     renderScene();
 }
 
-function createInitialState() {
+function createInitialState(pattern = currentPatternForState) {
+    const fallbackX = canvas.width / 2;
+    const fallbackY = canvas.height / 2;
+    const startX = Number(pattern?.start_x);
+    const startY = Number(pattern?.start_y);
+    const startAngle = Number(pattern?.start_angle);
     return {
-        x: canvas.width / 2,
-        y: canvas.height / 2,
-        angle: 0,
+        x: Number.isFinite(startX) ? startX : fallbackX,
+        y: Number.isFinite(startY) ? startY : fallbackY,
+        angle: Number.isFinite(startAngle) ? startAngle : 0,
         penDown: true,
     };
 }
@@ -1923,7 +1954,7 @@ function applyCommandToSimulation(simState, simSegments, command, args) {
 }
 
 function buildExpectedSegments(pattern) {
-    const simState = createInitialState();
+    const simState = createInitialState(pattern);
     const simSegments = [];
     const expansion = expandProgramLines(pattern.commands);
     if (!expansion.ok) {
@@ -2159,6 +2190,7 @@ async function saveProgress(patternId, solutionText, solved, score) {
         solution_text: solutionText,
         solved: solvedEver,
         score: scoreToStore,
+        time_seconds: getTaskElapsedSeconds(patternId),
     };
     progressByPattern.set(patternId, record);
     setLocalDraft(patternId, solutionText);
@@ -2173,6 +2205,7 @@ async function saveProgress(patternId, solutionText, solved, score) {
                 solution_text: solutionText,
                 solved: solvedEver,
                 score: scoreToStore,
+                time_seconds: getTaskElapsedSeconds(patternId),
             }),
         });
         if (response.ok) {
@@ -2214,6 +2247,7 @@ function persistDraft(patternId, solutionText, keepAlive = false) {
         solution_text: solutionText,
         solved: state.solved,
         score: state.score,
+        time_seconds: getTaskElapsedSeconds(patternId),
     };
     progressByPattern.set(patternId, record);
     saveProgressCache();
@@ -2226,6 +2260,7 @@ function persistDraft(patternId, solutionText, keepAlive = false) {
             solution_text: solutionText,
             solved: state.solved,
             score: state.score,
+            time_seconds: getTaskElapsedSeconds(patternId),
         }),
         keepalive: keepAlive,
     })
@@ -2310,7 +2345,7 @@ function renderPatternMenu() {
             const button = document.createElement("button");
             button.type = "button";
             button.className = "pattern-item";
-            button.textContent = pattern.name;
+            button.textContent = getLearnerPatternName(pattern);
 
             const progress = progressByPattern.get(pattern.id);
             if (progress && progress.solved) {
@@ -2362,9 +2397,10 @@ function loadPattern(patternId) {
 
     const pattern = PATTERNS.find((x) => x.id === patternId) || PATTERNS[0];
     selectedPatternId = pattern.id;
+    currentPatternForState = pattern;
     clearStepProgram();
     startTaskTimer(pattern.id);
-    currentPatternEl.textContent = `Aktualni uloha: ${pattern.name}`;
+    currentPatternEl.textContent = `Aktualni uloha: ${getLearnerPatternName(pattern)}`;
 
     if (draftByPattern.has(pattern.id)) {
         commandsEl.value = draftByPattern.get(pattern.id) || "";
@@ -2518,14 +2554,14 @@ commandsEl.addEventListener("input", () => {
 });
 window.addEventListener("beforeunload", () => {
     if (!isRunning) {
-        persistCurrentDraft(true);
         flushActiveTaskTime(true);
+        persistCurrentDraft(true);
     }
 });
 window.addEventListener("pagehide", () => {
     if (!isRunning) {
-        persistCurrentDraft(true);
         flushActiveTaskTime(true);
+        persistCurrentDraft(true);
     }
 });
 document.addEventListener("visibilitychange", () => {

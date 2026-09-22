@@ -620,10 +620,29 @@ canvas {
 
 .task-list {
     display: grid;
-    gap: 0.45rem;
+    gap: 0.25rem;
     list-style: none;
     margin: 0;
     padding: 0;
+}
+
+.task-group {
+    display: grid;
+    gap: 0.2rem;
+}
+
+.task-group + .task-group {
+    margin-top: 0.3rem;
+}
+
+.task-group-title {
+    margin: 0;
+    padding: 0.25rem 0.45rem;
+    border-bottom: 1px solid var(--line);
+    color: #536414;
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
 }
 
 .task-button {
@@ -632,12 +651,37 @@ canvas {
     background: #ffffff;
     color: #29313b;
     border-radius: 12px;
-    padding: 0.6rem 0.7rem;
+    padding: 0.38rem 0.55rem;
     text-align: left;
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 0.75rem;
+}
+
+.task-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 1.8rem;
+    gap: 0.25rem;
+    align-items: stretch;
+}
+
+.task-delete {
+    width: 1.8rem;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: transparent;
+    color: #a33a2b;
+    font-size: 1.1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.task-delete:hover,
+.task-delete:focus-visible {
+    border-color: #e2b9ae;
+    background: #fff1ee;
 }
 
 .task-button.active {
@@ -652,6 +696,21 @@ canvas {
 .task-id {
     font-weight: 700;
     overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.task-copy {
+    min-width: 0;
+    display: grid;
+    gap: 0.15rem;
+}
+
+.task-name {
+    overflow: hidden;
+    color: #29313b;
+    font-size: 0.86rem;
+    font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -737,6 +796,61 @@ canvas {
     gap: 0.55rem;
 }
 
+.admin-results {
+    grid-column: 1 / -1;
+    display: grid;
+    gap: 0.9rem;
+    padding: 1rem;
+}
+
+.results-layout {
+    width: 100%;
+    max-width: 1460px;
+    grid-template-columns: minmax(0, 1fr);
+}
+
+.results-toolbar {
+    display: grid;
+    gap: 0.35rem;
+    max-width: 34rem;
+}
+
+.results-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+}
+
+.results-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 760px;
+    font-size: 0.92rem;
+}
+
+.results-table th,
+.results-table td {
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+}
+
+.results-table th {
+    background: var(--warm);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.results-table tbody tr:hover {
+    background: #fbfdf2;
+}
+
+.result-solution {
+    max-width: 420px;
+    white-space: pre-wrap;
+    font-family: Consolas, "Courier New", monospace;
+}
 .new-task-form {
     display: grid;
     gap: 0.55rem;
@@ -784,7 +898,8 @@ canvas {
 
 #previewFrame {
     width: 100%;
-    min-height: 420px;
+    height: calc(100vh - 22rem);
+    min-height: 520px;
     border: 1px solid var(--line);
     border-radius: 10px;
     background: #ffffff;
@@ -849,6 +964,14 @@ canvas {
         grid-template-columns: 340px minmax(0, 1fr);
     }
 
+    .results-layout {
+        grid-template-columns: 340px minmax(0, 1fr);
+    }
+
+    .results-layout .admin-results {
+        grid-column: 1 / -1;
+    }
+
     .task-list-wrap {
         max-height: calc(100vh - 240px);
     }
@@ -873,6 +996,11 @@ canvas {
 
     .task-list-wrap {
         max-height: none;
+    }
+
+    #previewFrame {
+        height: 560px;
+        min-height: 0;
     }
 
     .app-footer {

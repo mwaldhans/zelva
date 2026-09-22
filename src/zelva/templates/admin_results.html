@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Výsledky řešitelů</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header class="school-header">
+        <div class="school-header-inner">
+            <a class="school-brand" href="{{ url_for('index') }}">
+                <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnazium Zidlochovice">
+            </a>
+            <nav class="site-nav" aria-label="Hlavni menu">
+                <a class="site-nav-link" href="{{ url_for('index') }}">Úlohy</a>
+                <a class="site-nav-link" href="{{ url_for('sandbox') }}">Pískoviště</a>
+                <a class="site-nav-link" href="{{ url_for('admin') }}">Úpravy úloh</a>
+                <a class="site-nav-link active" href="{{ url_for('admin_results') }}">Výsledky řešitelů</a>
+                <a class="site-nav-link" href="{{ url_for('logout') }}">Odhlasit {{ current_user.email }}</a>
+            </nav>
+        </div>
+    </header>
+
+    <main class="layout results-layout">
+        <section class="panel admin-results">
+            <div class="editor-topbar">
+                <div>
+                    <h1>Výsledky řešitelů</h1>
+                    <p class="admin-note">Přehled posledních uložených řešení a času jednotlivých řešitelů.</p>
+                </div>
+                <button id="reloadResultsBtn" type="button" class="secondary">Obnovit výsledky</button>
+            </div>
+            <div class="results-toolbar">
+                <label for="resultsFilter">Filtrovat výsledky</label>
+                <input id="resultsFilter" class="task-filter" type="search" placeholder="Jméno, e-mail nebo ID úlohy">
+            </div>
+            <div class="results-table-wrap">
+                <table class="results-table">
+                    <thead>
+                        <tr>
+                            <th>Řešitel</th>
+                            <th>Úloha</th>
+                            <th>Čas</th>
+                            <th>Stav</th>
+                            <th>Řešení</th>
+                            <th>Naposledy</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsBody"></tbody>
+                </table>
+            </div>
+            <p id="resultsStatus" class="admin-status" aria-live="polite"></p>
+        </section>
+    </main>
+
+    <script>
+        const resultsFilterEl = document.getElementById("resultsFilter");
+        const resultsBodyEl = document.getElementById("resultsBody");
+        const resultsStatusEl = document.getElementById("resultsStatus");
+        const reloadResultsBtn = document.getElementById("reloadResultsBtn");
+        let progressResults = [];
+
+        function formatResultTime(seconds) {
+            const safeSeconds = Math.max(0, Number(seconds) || 0);
+            const minutes = Math.floor(safeSeconds / 60);
+            return `${minutes}:${String(Math.floor(safeSeconds % 60)).padStart(2, "0")}`;
+        }
+
+        function renderResults() {
+            const filter = resultsFilterEl.value.trim().toLowerCase();
+            resultsBodyEl.textContent = "";
+            const visibleResults = progressResults.filter((item) => {
+                const haystack = [item.user_name, item.user_email, item.pattern_id].join(" ").toLowerCase();
+                return !filter || haystack.includes(filter);
+            });
+
+            for (const item of visibleResults) {
+                const row = document.createElement("tr");
+                const solverCell = document.createElement("td");
+                solverCell.textContent = item.user_name || item.user_email || item.user_id;
+                if (item.user_email && item.user_name) {
+                    solverCell.title = item.user_email;
+                }
+                const patternCell = document.createElement("td");
+                patternCell.textContent = item.pattern_id;
+                const timeCell = document.createElement("td");
+                timeCell.textContent = formatResultTime(item.time_seconds);
+                const stateCell = document.createElement("td");
+                stateCell.textContent = item.solved ? `Hotovo (${Math.round(item.score * 100)} %)` : "Rozpracováno";
+                const solutionCell = document.createElement("td");
+                solutionCell.className = "result-solution";
+                solutionCell.textContent = item.solution_text || "(prázdné)";
+                const updatedCell = document.createElement("td");
+                updatedCell.textContent = item.updated_at || "";
+                row.append(solverCell, patternCell, timeCell, stateCell, solutionCell, updatedCell);
+                resultsBodyEl.appendChild(row);
+            }
+
+            resultsStatusEl.textContent = `${visibleResults.length} výsledků`;
+        }
+
+        async function loadResults() {
+            resultsStatusEl.textContent = "Načítám výsledky...";
+            const response = await fetch("/api/admin/progress");
+            if (!response.ok) {
+                throw new Error("Výsledky se nepodařilo načíst.");
+            }
+            const payload = await response.json();
+            progressResults = payload.items || [];
+            renderResults();
+        }
+
+        resultsFilterEl.addEventListener("input", renderResults);
+        reloadResultsBtn.addEventListener("click", () => {
+            loadResults().catch((error) => {
+                resultsStatusEl.textContent = error.message;
+            });
+        });
+        loadResults().catch((error) => {
+            resultsStatusEl.textContent = error.message;
+        });
+    </script>
+</body>
+</html>

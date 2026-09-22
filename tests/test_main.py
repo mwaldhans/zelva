@@ -106,6 +106,30 @@ def test_admin_patterns_persist_in_sqlite(tmp_path: Path) -> None:
 
     assert custom_response.status_code == 201
 
+    second_custom_response = client.post(
+        "/api/custom-patterns",
+        json={
+            "id": "druha_uloha",
+            "name": "Druha uloha",
+            "category": "Testy",
+            "commands": ["forward(30)"],
+        },
+    )
+
+    assert second_custom_response.status_code == 201
+
+    delete_custom_response = client.delete("/api/custom-patterns/moje_uloha")
+    assert delete_custom_response.status_code == 200
+
+    remaining_patterns_response = client.get("/api/pattern-overrides")
+    assert "moje_uloha" not in remaining_patterns_response.json["custom_patterns"]
+
+    delete_builtin_response = client.delete("/api/custom-patterns/square")
+    assert delete_builtin_response.status_code == 200
+
+    patterns_response = client.get("/api/pattern-overrides")
+    assert "square" in patterns_response.json["deleted_patterns"]
+
     connection = sqlite3.connect(str(tmp_path / "test.db"))
     try:
         tables = {

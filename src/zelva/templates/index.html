@@ -13,9 +13,9 @@
                 <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnazium Zidlochovice">
             </a>
             <nav class="site-nav" aria-label="Hlavni menu">
-                <a class="site-nav-link active" href="{{ url_for('index') }}">Ulohy</a>
-                <a class="site-nav-link" href="{{ url_for('sandbox') }}">Piskoviste</a>
-                {% if current_user_is_admin %}<a class="site-nav-link" href="{{ url_for('admin') }}">Administrace</a>{% endif %}
+                <a class="site-nav-link active" href="{{ url_for('index') }}">Úlohy</a>
+                <a class="site-nav-link" href="{{ url_for('sandbox') }}">Pískoviště</a>
+                {% if current_user_is_admin %}<a class="site-nav-link" href="{{ url_for('admin') }}">Úpravy úloh</a><a class="site-nav-link" href="{{ url_for('admin_results') }}">Výsledky řešitelů</a>{% endif %}
                 {% if current_user %}<a class="site-nav-link" href="{{ url_for('logout') }}">Odhlasit {{ current_user.email }}</a>{% else %}<a class="site-nav-link" href="{{ url_for('login') }}">Prihlasit přes Google</a>{% endif %}
             </nav>
         </div>

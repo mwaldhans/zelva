@@ -13,9 +13,10 @@
                 <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnazium Zidlochovice">
             </a>
             <nav class="site-nav" aria-label="Hlavni menu">
-                <a class="site-nav-link" href="{{ url_for('index') }}">Ulohy</a>
-                <a class="site-nav-link" href="{{ url_for('sandbox') }}">Piskoviste</a>
-                <a class="site-nav-link active" href="{{ url_for('admin') }}">Administrace</a>
+                <a class="site-nav-link" href="{{ url_for('index') }}">Úlohy</a>
+                <a class="site-nav-link" href="{{ url_for('sandbox') }}">Pískoviště</a>
+                <a class="site-nav-link active" href="{{ url_for('admin') }}">Úpravy úloh</a>
+                <a class="site-nav-link" href="{{ url_for('admin_results') }}">Výsledky řešitelů</a>
                 <a class="site-nav-link" href="{{ url_for('logout') }}">Odhlasit {{ current_user.email }}</a>
             </nav>
         </div>
@@ -32,10 +33,15 @@
             <div class="task-list-wrap">
                 <div id="taskList" class="task-list" role="list" aria-label="Seznam úloh">
                     {% for pattern_id in pattern_ids %}
-                        <button type="button" class="task-button" data-pattern-id="{{ pattern_id }}">
-                            <span class="task-id">{{ pattern_id }}</span>
-                            <span class="task-badge" hidden>upraveno</span>
-                        </button>
+                        <div class="task-row">
+                            <button type="button" class="task-button" data-pattern-id="{{ pattern_id }}">
+                                <span class="task-copy">
+                                    <span class="task-name">Načítám název…</span>
+                                </span>
+                                <span class="task-badge" hidden>upraveno</span>
+                            </button>
+                            <button type="button" class="task-delete" data-delete-pattern-id="{{ pattern_id }}" aria-label="Smazat úlohu">×</button>
+                        </div>
                     {% endfor %}
                 </div>
             </div>
@@ -46,6 +52,11 @@
                 <input id="newTaskCategory" type="text" required placeholder="Kategorie">
                 <textarea id="newTaskHint" rows="3" placeholder="Nápověda (volitelné)"></textarea>
                 <textarea id="newTaskCommands" rows="6" required placeholder="Jeden příkaz na řádek"></textarea>
+                <div class="field-grid">
+                    <input id="newTaskStartX" type="number" step="1" placeholder="Počáteční X (volitelné)">
+                    <input id="newTaskStartY" type="number" step="1" placeholder="Počáteční Y (volitelné)">
+                </div>
+                <input id="newTaskStartAngle" type="number" step="1" placeholder="Počáteční směr ve stupních (volitelné)">
                 <button type="submit">Přidat úlohu</button>
                 <p id="newTaskStatus" class="admin-status" aria-live="polite"></p>
             </form>
@@ -100,6 +111,22 @@
                     </div>
                 </div>
 
+                <div class="field-grid">
+                    <div class="field">
+                        <label for="startXInput">Počáteční X</label>
+                        <input id="startXInput" type="number" step="1" placeholder="střed plátna: 360">
+                    </div>
+                    <div class="field">
+                        <label for="startYInput">Počáteční Y</label>
+                        <input id="startYInput" type="number" step="1" placeholder="střed plátna: 240">
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label for="startAngleInput">Počáteční směr (stupně)</label>
+                    <input id="startAngleInput" type="number" step="1" placeholder="0 = doprava">
+                </div>
+
                 <div class="admin-actions">
                     <button id="saveBtn" type="submit">Uložit přepis</button>
                     <button id="drawPreviewBtn" type="button" class="secondary">Vykreslit vzor</button>
@@ -117,10 +144,12 @@
                 <iframe id="previewFrame" title="Náhled řešitele" loading="lazy"></iframe>
             </section>
         </section>
+
     </main>
 
     <script>
         const patternButtons = Array.from(document.querySelectorAll("[data-pattern-id]"));
+        const taskDeleteButtons = Array.from(document.querySelectorAll("[data-delete-pattern-id]"));
         const taskFilterEl = document.getElementById("taskFilter");
         const selectedPatternIdEl = document.getElementById("selectedPatternId");
         const patternSelectEl = document.getElementById("patternSelect");
@@ -132,6 +161,9 @@
         const commandsInputEl = document.getElementById("commandsInput");
         const initialLinesInputEl = document.getElementById("initialLinesInput");
         const initialTextInputEl = document.getElementById("initialTextInput");
+        const startXInputEl = document.getElementById("startXInput");
+        const startYInputEl = document.getElementById("startYInput");
+        const startAngleInputEl = document.getElementById("startAngleInput");
         const adminStatusEl = document.getElementById("adminStatus");
         const adminForm = document.getElementById("adminForm");
         const drawPreviewBtn = document.getElementById("drawPreviewBtn");
@@ -142,10 +174,10 @@
         const previewFrame = document.getElementById("previewFrame");
         const newTaskForm = document.getElementById("newTaskForm");
         const newTaskStatus = document.getElementById("newTaskStatus");
-
         let selectedPatternId = patternButtons[0]?.dataset.patternId || "";
         let overridesByPattern = {};
         let basePatternsById = {};
+        let customPatternIds = new Set({{ custom_pattern_ids_json | safe }});
 
         function setNewTaskStatus(message, kind = "") {
             newTaskStatus.textContent = message;
@@ -158,25 +190,84 @@
         }
 
         function setFormEnabled(enabled) {
-            for (const element of [categoryInputEl, nameInputEl, hintInputEl, commandsInputEl, initialLinesInputEl, initialTextInputEl, drawPreviewBtn, testBtn, reloadBtn, resetBtn, saveBtn]) {
+            for (const element of [categoryInputEl, nameInputEl, hintInputEl, commandsInputEl, initialLinesInputEl, initialTextInputEl, startXInputEl, startYInputEl, startAngleInputEl, drawPreviewBtn, testBtn, reloadBtn, resetBtn, saveBtn]) {
                 element.disabled = !enabled;
             }
         }
 
+        function updateDeleteButton() {
+            const isCustom = customPatternIds.has(selectedPatternId);
+            resetBtn.textContent = isCustom ? "Smazat úlohu" : "Smazat přepis";
+            resetBtn.title = isCustom
+                ? "Trvale odstranit vlastní úlohu"
+                : "Odstranit pouze uložený přepis";
+        }
+
+            function getDisplayTaskName(name, patternId) {
+                return String(name || patternId);
+            }
+
         function updateTaskList() {
             const filterValue = taskFilterEl.value.trim().toLowerCase();
+            const groups = new Map();
+
             for (const button of patternButtons) {
                 const patternId = button.dataset.patternId;
+                const patternData = overridesByPattern[patternId] || basePatternsById[patternId] || {};
+                const category = patternData.category || "Ostatní";
+                const name = getDisplayTaskName(patternData.name, patternId);
                 const hasOverride = Boolean(overridesByPattern[patternId]);
-                const matchesFilter = !filterValue || patternId.toLowerCase().includes(filterValue);
+                const matchesFilter = !filterValue || `${patternId} ${name} ${category}`.toLowerCase().includes(filterValue);
                 button.hidden = !matchesFilter;
+                button.parentElement.hidden = !matchesFilter;
                 button.classList.toggle("active", patternId === selectedPatternId);
                 button.classList.toggle("overridden", hasOverride);
+
+                const nameElement = button.querySelector(".task-name");
+                if (nameElement) {
+                    nameElement.textContent = name;
+                }
 
                 const badge = button.querySelector(".task-badge");
                 if (badge) {
                     badge.hidden = !hasOverride;
                 }
+
+                if (matchesFilter) {
+                    if (!groups.has(category)) {
+                        groups.set(category, []);
+                    }
+                    groups.get(category).push(button);
+                }
+            }
+
+            for (const buttons of groups.values()) {
+                buttons.sort((firstButton, secondButton) => {
+                    const firstId = firstButton.dataset.patternId;
+                    const secondId = secondButton.dataset.patternId;
+                    const firstData = overridesByPattern[firstId] || basePatternsById[firstId] || {};
+                    const secondData = overridesByPattern[secondId] || basePatternsById[secondId] || {};
+                    return String(firstData.name || firstId).localeCompare(
+                        String(secondData.name || secondId),
+                        "cs",
+                        { numeric: true, sensitivity: "base" },
+                    );
+                });
+            }
+
+            const taskListEl = document.getElementById("taskList");
+            taskListEl.textContent = "";
+            for (const [category, buttons] of groups) {
+                const group = document.createElement("section");
+                group.className = "task-group";
+                const heading = document.createElement("h2");
+                heading.className = "task-group-title";
+                heading.textContent = category;
+                group.appendChild(heading);
+                for (const button of buttons) {
+                    group.appendChild(button.parentElement);
+                }
+                taskListEl.appendChild(group);
             }
         }
 
@@ -378,6 +469,9 @@
             commandsInputEl.value = Array.isArray(override?.commands) ? override.commands.join("\n") : "";
             initialLinesInputEl.value = String(override?.initial_lines || 2);
             initialTextInputEl.value = override?.initial_text || "";
+            startXInputEl.value = override?.start_x ?? "";
+            startYInputEl.value = override?.start_y ?? "";
+            startAngleInputEl.value = override?.start_angle ?? "";
         }
 
         function collectPayload() {
@@ -414,6 +508,16 @@
             const initialText = initialTextInputEl.value.trim();
             if (initialText) {
                 payload.initial_text = initialText;
+            }
+
+            for (const [key, input] of [["start_x", startXInputEl], ["start_y", startYInputEl], ["start_angle", startAngleInputEl]]) {
+                const value = input.value.trim();
+                if (value) {
+                    const parsed = Number(value);
+                    if (Number.isFinite(parsed)) {
+                        payload[key] = parsed;
+                    }
+                }
             }
 
             return payload;
@@ -474,9 +578,11 @@
 
             const payload = await response.json();
             overridesByPattern = payload.overrides || {};
+            customPatternIds = new Set(Object.keys(payload.custom_patterns || {}));
             Object.assign(basePatternsById, payload.custom_patterns || {});
             updatePatternSelect();
             updateTaskList();
+            updateDeleteButton();
         }
 
         async function loadPattern(patternId) {
@@ -485,6 +591,7 @@
             }
 
             selectedPatternId = patternId;
+            updateDeleteButton();
             selectedPatternIdEl.value = patternId;
             patternSelectEl.value = patternId;
             selectedPatternTitleEl.textContent = patternId;
@@ -515,6 +622,7 @@
             setStatus("Přepis načten.", "ok");
             setFormEnabled(true);
             updateTaskList();
+            drawPatternPreview();
         }
 
         async function savePattern() {
@@ -551,30 +659,88 @@
                 return;
             }
 
-            if (!window.confirm(`Smazat přepis pro ${selectedPatternId}?`)) {
+            const isCustom = customPatternIds.has(selectedPatternId);
+            const confirmation = isCustom
+                ? `Opravdu trvale smazat úlohu ${getPatternLabel(selectedPatternId)}?`
+                : `Smazat přepis pro ${selectedPatternId}?`;
+            if (!window.confirm(confirmation)) {
                 return;
             }
 
-            setStatus("Mažu přepis...");
+            setStatus(isCustom ? "Mažu úlohu..." : "Mažu přepis...");
             setFormEnabled(false);
 
-            const response = await fetch(`/api/pattern-overrides/${encodeURIComponent(selectedPatternId)}`, {
+            const response = await fetch(isCustom
+                ? `/api/custom-patterns/${encodeURIComponent(selectedPatternId)}`
+                : `/api/pattern-overrides/${encodeURIComponent(selectedPatternId)}`, {
                 method: "DELETE",
             });
 
             if (!response.ok) {
-                throw new Error("Nepodařilo se smazat přepis.");
+                const result = await response.json().catch(() => ({}));
+                throw new Error(result.error || (isCustom ? "Nepodařilo se smazat úlohu." : "Nepodařilo se smazat přepis."));
+            }
+
+            if (isCustom) {
+                window.location.reload();
+                return;
             }
 
             delete overridesByPattern[selectedPatternId];
-            const basePattern = basePatternsById[selectedPatternId] || {};
-            fillForm(basePattern);
-            selectedPatternTitleEl.textContent = getPatternLabel(selectedPatternId);
-            selectedPatternMetaEl.textContent = `Upravuješ úlohu ${getPatternLabel(selectedPatternId)}. Prázdná pole zůstávají beze změny.`;
+            try {
+                const rawDrafts = window.localStorage.getItem("zelva_code_drafts_v1");
+                const drafts = rawDrafts ? JSON.parse(rawDrafts) : {};
+                delete drafts[selectedPatternId];
+                window.localStorage.setItem("zelva_code_drafts_v1", JSON.stringify(drafts));
+            } catch (_) {
+                window.localStorage.removeItem("zelva_code_drafts_v1");
+            }
+
+            await loadOverridesOverview();
+            await loadPattern(selectedPatternId);
+            setStatus("Přepis smazán.", "ok");
+        }
+
+        async function deleteTaskFromList(patternId) {
+            const isCustom = customPatternIds.has(patternId);
+            const label = getPatternLabel(patternId);
+            const confirmation = `Opravdu trvale smazat úlohu ${label}?`;
+            if (!window.confirm(confirmation)) {
+                return;
+            }
+
+            setStatus("Mažu úlohu...");
+            const response = await fetch(`/api/custom-patterns/${encodeURIComponent(patternId)}`, {
+                method: "DELETE",
+                credentials: "same-origin",
+            });
+            const result = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(result.error || "Mazání se nepodařilo.");
+            }
+
+            const taskButtonIndex = patternButtons.findIndex((button) => button.dataset.patternId === patternId);
+            const taskButton = taskButtonIndex >= 0 ? patternButtons[taskButtonIndex] : null;
+            const row = taskButton?.parentElement;
+            row?.remove();
+            if (taskButtonIndex >= 0) {
+                patternButtons.splice(taskButtonIndex, 1);
+            }
+            const deleteButtonIndex = taskDeleteButtons.findIndex((button) => button.dataset.deletePatternId === patternId);
+            if (deleteButtonIndex >= 0) {
+                taskDeleteButtons.splice(deleteButtonIndex, 1);
+            }
+            if (isCustom) {
+                customPatternIds.delete(patternId);
+                basePatternsById = Object.fromEntries(
+                    Object.entries(basePatternsById).filter(([id]) => id !== patternId),
+                );
+            } else {
+                delete overridesByPattern[patternId];
+            }
             updatePatternSelect();
             updateTaskList();
-            setStatus("Přepis smazán.", "ok");
-            setFormEnabled(true);
+            setStatus("Úloha smazána.", "ok");
         }
 
         patternButtons.forEach((button) => {
@@ -582,6 +748,14 @@
                 if (button.dataset.patternId !== selectedPatternId) {
                     loadPattern(button.dataset.patternId).catch((error) => setStatus(error.message, "bad"));
                 }
+            });
+        });
+
+        taskDeleteButtons.forEach((button) => {
+            button.addEventListener("click", (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                deleteTaskFromList(button.dataset.deletePatternId, button).catch((error) => setStatus(error.message, "bad"));
             });
         });
 
@@ -612,13 +786,32 @@
                 hint: document.getElementById("newTaskHint").value,
                 commands: document.getElementById("newTaskCommands").value.split(/\r?\n/u),
             };
+            for (const [key, id] of [["start_x", "newTaskStartX"], ["start_y", "newTaskStartY"], ["start_angle", "newTaskStartAngle"]]) {
+                const value = document.getElementById(id)?.value.trim();
+                if (value && Number.isFinite(Number(value))) {
+                    payload[key] = Number(value);
+                }
+            }
             try {
                 const response = await fetch("/api/custom-patterns", {
                     method: "POST",
+                    credentials: "same-origin",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
                 });
-                const result = await response.json();
+                const responseText = await response.text();
+                let result = {};
+                try {
+                    result = responseText ? JSON.parse(responseText) : {};
+                } catch (_) {
+                    if (response.status === 401 || response.redirected) {
+                        throw new Error("Přihlášení vypršelo. Obnov stránku a přihlas se znovu.");
+                    }
+                    throw new Error(`Server vrátil neočekávanou odpověď (${response.status}). Restartuj aplikaci a obnov stránku.`);
+                }
+                if (response.status === 401) {
+                    throw new Error("Přihlášení vypršelo. Obnov stránku a přihlas se znovu.");
+                }
                 if (!response.ok) {
                     throw new Error(result.error || "Úlohu se nepodařilo uložit.");
                 }
@@ -664,7 +857,6 @@
                 await loadOverridesOverview();
                 if (selectedPatternId) {
                     await loadPattern(selectedPatternId);
-                    drawPatternPreview();
                 }
                 setStatus("Připraveno k úpravám.", "ok");
             } catch (error) {

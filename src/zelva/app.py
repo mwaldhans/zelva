@@ -57,6 +57,11 @@ def _admin_pattern_ids() -> list[str]:
     return _pattern_ids_from_source()
 
 
+def _load_deleted_patterns(app: Flask) -> set[str]:
+    rows = _get_db().execute("SELECT pattern_id FROM deleted_patterns").fetchall()
+    return {row["pattern_id"] for row in rows}
+
+
 def _clean_pattern_overrides(raw_overrides: object) -> dict[str, dict[str, object]]:
     if not isinstance(raw_overrides, dict):
         return {}
@@ -71,6 +76,11 @@ def _clean_pattern_overrides(raw_overrides: object) -> dict[str, dict[str, objec
             value = override.get(key)
             if isinstance(value, str):
                 entry[key] = value
+
+        for key in ("start_x", "start_y", "start_angle"):
+            value = override.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                entry[key] = float(value)
 
         initial_lines = override.get("initial_lines")
         if isinstance(initial_lines, (int, float)):
@@ -152,6 +162,10 @@ def _sanitize_custom_pattern(payload: object) -> tuple[str, dict[str, object]] |
         "initial_lines": initial_lines,
         "initial_text": str(payload.get("initial_text", "")).strip(),
     }
+    for key in ("start_x", "start_y", "start_angle"):
+        value = payload.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            pattern[key] = float(value)
     return pattern_id, pattern
 
 
@@ -166,6 +180,18 @@ def _sanitize_pattern_override(payload: object) -> dict[str, object]:
             value = value.strip()
             if value:
                 override[key] = value
+
+    for key in ("start_x", "start_y", "start_angle"):
+        value = payload.get(key)
+        if isinstance(value, str):
+            value = value.strip()
+            if value:
+                try:
+                    value = float(value)
+                except ValueError:
+                    value = None
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            override[key] = float(value)
 
     initial_lines_raw = payload.get("initial_lines")
     if isinstance(initial_lines_raw, str):
@@ -199,6 +225,9 @@ def _pattern_from_row(row: sqlite3.Row) -> dict[str, object]:
     for key in ("category", "name", "hint", "initial_text"):
         if row[key] is not None and row[key] != "":
             pattern[key] = row[key]
+    for key in ("start_x", "start_y", "start_angle"):
+        if row[key] is not None:
+            pattern[key] = float(row[key])
     if row["initial_lines"] is not None:
         pattern["initial_lines"] = int(row["initial_lines"])
     if row["commands_json"]:
@@ -208,7 +237,7 @@ def _pattern_from_row(row: sqlite3.Row) -> dict[str, object]:
 
 def _load_pattern_overrides(app: Flask) -> dict[str, dict[str, object]]:
     rows = _get_db().execute(
-        "SELECT pattern_id, category, name, hint, initial_text, initial_lines, commands_json FROM pattern_overrides"
+        "SELECT pattern_id, category, name, hint, initial_text, initial_lines, commands_json, start_x, start_y, start_angle FROM pattern_overrides"
     ).fetchall()
     return {row["pattern_id"]: _pattern_from_row(row) for row in rows}
 
@@ -220,8 +249,8 @@ def _save_pattern_overrides(app: Flask, overrides: dict[str, dict[str, object]])
         db.execute(
             """
             INSERT INTO pattern_overrides
-                (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (pattern_id, category, name, hint, initial_text, initial_lines, commands_json, start_x, start_y, start_angle)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pattern_id,
@@ -231,6 +260,9 @@ def _save_pattern_overrides(app: Flask, overrides: dict[str, dict[str, object]])
                 override.get("initial_text"),
                 override.get("initial_lines"),
                 json.dumps(override.get("commands"), ensure_ascii=False) if "commands" in override else None,
+                override.get("start_x"),
+                override.get("start_y"),
+                override.get("start_angle"),
             ),
         )
     db.commit()
@@ -238,7 +270,7 @@ def _save_pattern_overrides(app: Flask, overrides: dict[str, dict[str, object]])
 
 def _load_custom_patterns(app: Flask) -> dict[str, dict[str, object]]:
     rows = _get_db().execute(
-        "SELECT pattern_id, category, name, hint, initial_text, initial_lines, commands_json FROM custom_patterns"
+        "SELECT pattern_id, category, name, hint, initial_text, initial_lines, commands_json, start_x, start_y, start_angle FROM custom_patterns"
     ).fetchall()
     return {row["pattern_id"]: _pattern_from_row(row) for row in rows}
 
@@ -250,17 +282,20 @@ def _save_custom_patterns(app: Flask, patterns: dict[str, dict[str, object]]) ->
         db.execute(
             """
             INSERT INTO custom_patterns
-                (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                (pattern_id, category, name, hint, initial_text, initial_lines, commands_json, start_x, start_y, start_angle)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pattern_id,
-                pattern.get("category"),
-                pattern.get("name"),
-                pattern.get("hint"),
-                pattern.get("initial_text"),
-                pattern.get("initial_lines"),
-                json.dumps(pattern.get("commands", []), ensure_ascii=False),
+                pattern.get("category") or "Obecne",
+                pattern.get("name") or pattern_id,
+                pattern.get("hint") or "",
+                pattern.get("initial_text") or "",
+                pattern.get("initial_lines") or 2,
+                json.dumps(pattern.get("commands") or [], ensure_ascii=False),
+                pattern.get("start_x"),
+                pattern.get("start_y"),
+                pattern.get("start_angle"),
             ),
         )
     db.commit()
@@ -351,6 +386,9 @@ def _init_db(app: Flask) -> None:
                 solution_text TEXT NOT NULL DEFAULT '',
                 solved INTEGER NOT NULL DEFAULT 0,
                 score REAL NOT NULL DEFAULT 0,
+                user_name TEXT NOT NULL DEFAULT '',
+                user_email TEXT NOT NULL DEFAULT '',
+                time_seconds INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
@@ -361,6 +399,17 @@ def _init_db(app: Flask) -> None:
             ON user_progress (user_id, pattern_id)
             """
         )
+        progress_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(user_progress)").fetchall()
+        }
+        for column, definition in (
+            ("user_name", "TEXT NOT NULL DEFAULT ''"),
+            ("user_email", "TEXT NOT NULL DEFAULT ''"),
+            ("time_seconds", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if column not in progress_columns:
+                conn.execute(f"ALTER TABLE user_progress ADD COLUMN {column} {definition}")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS pattern_overrides (
@@ -370,7 +419,10 @@ def _init_db(app: Flask) -> None:
                 hint TEXT,
                 initial_text TEXT,
                 initial_lines INTEGER,
-                commands_json TEXT
+                commands_json TEXT,
+                start_x REAL,
+                start_y REAL,
+                start_angle REAL
             )
             """
         )
@@ -383,10 +435,56 @@ def _init_db(app: Flask) -> None:
                 hint TEXT NOT NULL DEFAULT '',
                 initial_text TEXT NOT NULL DEFAULT '',
                 initial_lines INTEGER NOT NULL DEFAULT 2,
-                commands_json TEXT NOT NULL
+                commands_json TEXT NOT NULL,
+                start_x REAL,
+                start_y REAL,
+                start_angle REAL
             )
             """
         )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS deleted_patterns (
+                pattern_id TEXT PRIMARY KEY
+            )
+            """
+        )
+
+        table_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(custom_patterns)").fetchall()
+        }
+        for column, definition in (
+            ("category", "TEXT NOT NULL DEFAULT 'Obecne'"),
+            ("name", "TEXT NOT NULL DEFAULT ''"),
+            ("hint", "TEXT NOT NULL DEFAULT ''"),
+            ("initial_text", "TEXT NOT NULL DEFAULT ''"),
+            ("initial_lines", "INTEGER NOT NULL DEFAULT 2"),
+            ("commands_json", "TEXT NOT NULL DEFAULT '[]'"),
+            ("start_x", "REAL"),
+            ("start_y", "REAL"),
+            ("start_angle", "REAL"),
+        ):
+            if column not in table_columns:
+                conn.execute(f"ALTER TABLE custom_patterns ADD COLUMN {column} {definition}")
+
+        override_columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(pattern_overrides)").fetchall()
+        }
+        for column, definition in (
+            ("category", "TEXT"),
+            ("name", "TEXT"),
+            ("hint", "TEXT"),
+            ("initial_text", "TEXT"),
+            ("initial_lines", "INTEGER"),
+            ("commands_json", "TEXT"),
+            ("start_x", "REAL"),
+            ("start_y", "REAL"),
+            ("start_angle", "REAL"),
+        ):
+            if column not in override_columns:
+                conn.execute(f"ALTER TABLE pattern_overrides ADD COLUMN {column} {definition}")
 
         override_count = conn.execute("SELECT COUNT(*) FROM pattern_overrides").fetchone()[0]
         if override_count == 0:
@@ -394,8 +492,8 @@ def _init_db(app: Flask) -> None:
                 conn.execute(
                     """
                     INSERT INTO pattern_overrides
-                        (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (pattern_id, category, name, hint, initial_text, initial_lines, commands_json, start_x, start_y, start_angle)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         pattern_id,
@@ -405,6 +503,9 @@ def _init_db(app: Flask) -> None:
                         override.get("initial_text"),
                         override.get("initial_lines"),
                         json.dumps(override.get("commands"), ensure_ascii=False) if "commands" in override else None,
+                        override.get("start_x"),
+                        override.get("start_y"),
+                        override.get("start_angle"),
                     ),
                 )
 
@@ -418,8 +519,8 @@ def _init_db(app: Flask) -> None:
                 conn.execute(
                     """
                     INSERT INTO custom_patterns
-                        (pattern_id, category, name, hint, initial_text, initial_lines, commands_json)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                        (pattern_id, category, name, hint, initial_text, initial_lines, commands_json, start_x, start_y, start_angle)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         pattern_id,
@@ -429,6 +530,9 @@ def _init_db(app: Flask) -> None:
                         clean_pattern["initial_text"],
                         clean_pattern["initial_lines"],
                         json.dumps(clean_pattern["commands"], ensure_ascii=False),
+                        clean_pattern.get("start_x"),
+                        clean_pattern.get("start_y"),
+                        clean_pattern.get("start_angle"),
                     ),
                 )
         conn.commit()
@@ -543,11 +647,19 @@ def create_app(test_config: dict | None = None) -> Flask:
     def admin() -> str:
         overrides = _load_pattern_overrides(app)
         custom_patterns = _load_custom_patterns(app)
+        deleted_patterns = _load_deleted_patterns(app)
+        pattern_ids = [pattern_id for pattern_id in _admin_pattern_ids() if pattern_id not in deleted_patterns]
         return render_template(
             "admin.html",
-            pattern_ids=_admin_pattern_ids() + [pattern_id for pattern_id in custom_patterns if pattern_id not in _admin_pattern_ids()],
+            pattern_ids=pattern_ids + [pattern_id for pattern_id in custom_patterns if pattern_id not in _admin_pattern_ids()],
+            custom_pattern_ids_json=json.dumps(list(custom_patterns), ensure_ascii=False),
             overrides_json=json.dumps(overrides, ensure_ascii=False, indent=2),
         )
+
+    @app.get("/admin/results")
+    @_admin_required
+    def admin_results() -> str:
+        return render_template("admin_results.html")
 
     @app.get("/api/health")
     def health() -> tuple[dict[str, str], int]:
@@ -555,7 +667,12 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/api/pattern-overrides")
     def get_pattern_overrides() -> tuple[dict[str, dict[str, dict[str, object]]], int]:
-        return jsonify({"overrides": _load_pattern_overrides(app), "custom_patterns": _load_custom_patterns(app)}), 200
+        deleted_patterns = _load_deleted_patterns(app)
+        return jsonify({
+            "overrides": _load_pattern_overrides(app),
+            "custom_patterns": _load_custom_patterns(app),
+            "deleted_patterns": sorted(deleted_patterns),
+        }), 200
 
     @app.post("/api/custom-patterns")
     @_admin_required
@@ -570,6 +687,23 @@ def create_app(test_config: dict | None = None) -> Flask:
         patterns[pattern_id] = pattern
         _save_custom_patterns(app, patterns)
         return jsonify({"pattern_id": pattern_id, "pattern": pattern}), 201
+
+    @app.delete("/api/custom-patterns/<pattern_id>")
+    @_admin_required
+    def delete_custom_pattern(pattern_id: str) -> tuple[dict[str, str], int]:
+        if pattern_id in _pattern_ids_from_source():
+            db = _get_db()
+            db.execute("INSERT OR IGNORE INTO deleted_patterns (pattern_id) VALUES (?)", (pattern_id,))
+            db.commit()
+            return jsonify({"pattern_id": pattern_id}), 200
+
+        patterns = _load_custom_patterns(app)
+        if pattern_id not in patterns:
+            return jsonify({"error": "Vlastní úloha nebyla nalezena."}), 404
+
+        patterns.pop(pattern_id)
+        _save_custom_patterns(app, patterns)
+        return jsonify({"pattern_id": pattern_id}), 200
 
     @app.get("/api/pattern-overrides/<pattern_id>")
     @_admin_required
@@ -611,7 +745,7 @@ def create_app(test_config: dict | None = None) -> Flask:
         db = _get_db()
         rows = db.execute(
             """
-            SELECT pattern_id, solution_text, solved, score, updated_at
+            SELECT pattern_id, solution_text, solved, score, time_seconds, updated_at
             FROM user_progress
             WHERE user_id = ?
             ORDER BY pattern_id
@@ -624,6 +758,7 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "solution_text": row["solution_text"],
                 "solved": bool(row["solved"]),
                 "score": float(row["score"]),
+                "time_seconds": int(row["time_seconds"]),
                 "updated_at": row["updated_at"],
             }
             for row in rows
@@ -636,19 +771,28 @@ def create_app(test_config: dict | None = None) -> Flask:
         solution_text = str(payload.get("solution_text", ""))
         solved = bool(payload.get("solved", False))
         score = float(payload.get("score", 0))
+        time_seconds = max(0, int(payload.get("time_seconds", 0) or 0))
+        user = _current_user() or {}
+        user_id = user.get("sub", g.browser_user_id)
+        user_name = str(user.get("name", ""))
+        user_email = str(user.get("email", ""))
 
         db = _get_db()
         db.execute(
             """
-            INSERT INTO user_progress (user_id, pattern_id, solution_text, solved, score)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO user_progress
+                (user_id, pattern_id, solution_text, solved, score, user_name, user_email, time_seconds)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, pattern_id) DO UPDATE SET
                 solution_text = excluded.solution_text,
                 solved = excluded.solved,
                 score = excluded.score,
+                user_name = excluded.user_name,
+                user_email = excluded.user_email,
+                time_seconds = excluded.time_seconds,
                 updated_at = CURRENT_TIMESTAMP
             """,
-            (session.get("user", {}).get("sub", g.browser_user_id), pattern_id, solution_text, int(solved), score),
+            (user_id, pattern_id, solution_text, int(solved), score, user_name, user_email, time_seconds),
         )
         db.commit()
 
@@ -658,8 +802,37 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "solution_text": solution_text,
                 "solved": solved,
                 "score": score,
+                "time_seconds": time_seconds,
             }
         ), 200
+
+    @app.get("/api/admin/progress")
+    @_admin_required
+    def get_admin_progress() -> tuple[dict[str, list[dict[str, object]]], int]:
+        rows = _get_db().execute(
+            """
+            SELECT user_id, user_name, user_email, pattern_id, solution_text,
+                   solved, score, time_seconds, updated_at
+            FROM user_progress
+            ORDER BY updated_at DESC, user_email, pattern_id
+            """
+        ).fetchall()
+        return jsonify({
+            "items": [
+                {
+                    "user_id": row["user_id"],
+                    "user_name": row["user_name"],
+                    "user_email": row["user_email"],
+                    "pattern_id": row["pattern_id"],
+                    "solution_text": row["solution_text"],
+                    "solved": bool(row["solved"]),
+                    "score": float(row["score"]),
+                    "time_seconds": int(row["time_seconds"]),
+                    "updated_at": row["updated_at"],
+                }
+                for row in rows
+            ]
+        }), 200
 
     return app
 
