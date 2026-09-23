@@ -1556,6 +1556,10 @@ function expandProgramLines(rawLines) {
                 return { ok: false, error: `Neocekavane odsazeni na radku ${i + 1}.` };
             }
 
+            if (raw === "return") {
+                return { ok: true, lines: expanded, nextIndex: i + 1, returned: true };
+            }
+
             const loopMatch = raw.match(/^for\s+([a-zA-Z_][a-zA-Z0-9_]*)\s+in\s+range\(\s*(.+)\s*\)\s*:\s*$/);
             if (loopMatch) {
                 const loopVar = loopMatch[1];
@@ -1583,6 +1587,9 @@ function expandProgramLines(rawLines) {
                     }
                     for (const cmd of nested.lines) {
                         expanded.push({ ...cmd });
+                    }
+                    if (nested.returned) {
+                        return { ok: true, lines: expanded, nextIndex: blockEnd, returned: true };
                     }
                 }
                 i = blockEnd - 1;
@@ -1635,6 +1642,9 @@ function expandProgramLines(rawLines) {
                     for (const cmd of chosen.lines) {
                         expanded.push({ ...cmd });
                     }
+                    if (chosen.returned) {
+                        return { ok: true, lines: expanded, nextIndex: ifEnd, returned: true };
+                    }
                 } else if (elseStart !== -1) {
                     const chosen = parseBlock(elseStart, elseIndent, env, callStack, elseEnd);
                     if (!chosen.ok) {
@@ -1642,6 +1652,9 @@ function expandProgramLines(rawLines) {
                     }
                     for (const cmd of chosen.lines) {
                         expanded.push({ ...cmd });
+                    }
+                    if (chosen.returned) {
+                        return { ok: true, lines: expanded, nextIndex: elseEnd, returned: true };
                     }
                 }
 

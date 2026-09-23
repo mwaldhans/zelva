@@ -341,7 +341,7 @@ def _google_client(app: Flask):
         client_id=client_id,
         client_secret=client_secret,
         server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
-        client_kwargs={"scope": "openid email profile", "hd": LOGIN_DOMAIN},
+        client_kwargs={"scope": "openid email profile"},
     )
 
 
@@ -356,8 +356,22 @@ def _is_admin(user: dict[str, str] | None) -> bool:
 
 
 def _is_allowed_login_email(email: str) -> bool:
-    domain = email.rsplit("@", 1)[-1]
-    return "@" in email and (domain == LOGIN_DOMAIN or domain.endswith(f".{LOGIN_DOMAIN}"))
+    if email.count("@") != 1:
+        return False
+
+    domain = email.rsplit("@", 1)[1]
+    labels = domain.split(".")
+    if any(not label for label in labels):
+        return False
+
+    def is_allowed_domain(remaining_labels: list[str]) -> bool:
+        if ".".join(remaining_labels) == LOGIN_DOMAIN:
+            return True
+        if len(remaining_labels) <= 1:
+            return False
+        return is_allowed_domain(remaining_labels[1:])
+
+    return is_allowed_domain(labels)
 
 
 def _admin_required(view):

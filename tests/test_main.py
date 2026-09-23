@@ -8,8 +8,10 @@ def test_login_email_accepts_root_and_subdomains() -> None:
     assert _is_allowed_login_email("student@gymnzidlo.cz")
     assert _is_allowed_login_email("student@class.gymnzidlo.cz")
     assert _is_allowed_login_email("student@a.class.gymnzidlo.cz")
+    assert _is_allowed_login_email("student@one.two.three.gymnzidlo.cz")
     assert not _is_allowed_login_email("student@gymnzidlo.cz.evil.test")
     assert not _is_allowed_login_email("student@other.cz")
+    assert not _is_allowed_login_email("student@one..gymnzidlo.cz")
 
 
 def test_home_page_is_available() -> None:
