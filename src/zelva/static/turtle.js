@@ -489,6 +489,7 @@ async function loadPatternOverrides() {
         applyDeletedPatterns(payload.deleted_patterns || []);
         applyCustomPatterns(payload.custom_patterns || {});
         applyPatternOverrides(payload.overrides || {});
+        applyCategoryOrder(payload.category_order || []);
     } catch (_) {
         // Ignore missing admin overrides.
     }
@@ -514,6 +515,26 @@ let preparedStepProgram = null;
 let preparedStepSource = "";
 let preparedStepIndex = 0;
 let preparedStepStates = [];
+
+function applyCategoryOrder(categoryOrder) {
+    if (!Array.isArray(categoryOrder) || !categoryOrder.length) {
+        return;
+    }
+
+    const ordered = [];
+    for (const category of categoryOrder) {
+        if (typeof category === "string" && category && !ordered.includes(category)) {
+            ordered.push(category);
+        }
+    }
+    for (const category of CATEGORY_ORDER) {
+        if (!ordered.includes(category)) {
+            ordered.push(category);
+        }
+    }
+    CATEGORY_ORDER.splice(0, CATEGORY_ORDER.length, ...ordered);
+    renderPatternMenu();
+}
 
 const HINT_STORAGE_KEY = "zelva_hints_used";
 const hintUsedByPattern = new Map();

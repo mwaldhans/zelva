@@ -60,6 +60,13 @@
                 <button type="submit">Přidat úlohu</button>
                 <p id="newTaskStatus" class="admin-status" aria-live="polite"></p>
             </form>
+            <section class="new-task-form category-order-panel">
+                <h2>Pořadí kategorií</h2>
+                <p class="admin-note">Pomocí šipek nastav pořadí kategorií v seznamu úloh.</p>
+                <div id="categoryOrderList" class="task-list" aria-label="Pořadí kategorií"></div>
+                <button id="saveCategoryOrderBtn" type="button">Uložit pořadí kategorií</button>
+                <p id="categoryOrderStatus" class="admin-status" aria-live="polite"></p>
+            </section>
         </section>
 
         <section class="panel admin-editor">
@@ -174,10 +181,66 @@
         const previewFrame = document.getElementById("previewFrame");
         const newTaskForm = document.getElementById("newTaskForm");
         const newTaskStatus = document.getElementById("newTaskStatus");
+        const categoryOrderListEl = document.getElementById("categoryOrderList");
+        const saveCategoryOrderBtn = document.getElementById("saveCategoryOrderBtn");
+        const categoryOrderStatusEl = document.getElementById("categoryOrderStatus");
         let selectedPatternId = patternButtons[0]?.dataset.patternId || "";
         let overridesByPattern = {};
         let basePatternsById = {};
         let customPatternIds = new Set({{ custom_pattern_ids_json | safe }});
+        let categoryOrder = [];
+
+        function renderCategoryOrder() {
+            const categories = new Set(categoryOrder);
+            for (const pattern of Object.values(basePatternsById)) {
+                if (pattern.category) categories.add(pattern.category);
+            }
+            for (const pattern of Object.values(overridesByPattern)) {
+                if (pattern.category) categories.add(pattern.category);
+            }
+            categoryOrder = [...categoryOrder, ...[...categories].filter((category) => !categoryOrder.includes(category))];
+            categoryOrderListEl.textContent = "";
+            categoryOrder.forEach((category, index) => {
+                const row = document.createElement("div");
+                row.className = "task-row";
+                const label = document.createElement("span");
+                label.className = "task-copy";
+                label.textContent = category;
+                const actions = document.createElement("span");
+                const up = document.createElement("button");
+                up.type = "button";
+                up.textContent = "↑";
+                up.disabled = index === 0;
+                up.addEventListener("click", () => moveCategory(index, -1));
+                const down = document.createElement("button");
+                down.type = "button";
+                down.textContent = "↓";
+                down.disabled = index === categoryOrder.length - 1;
+                down.addEventListener("click", () => moveCategory(index, 1));
+                actions.append(up, down);
+                row.append(label, actions);
+                categoryOrderListEl.append(row);
+            });
+        }
+
+        function moveCategory(index, offset) {
+            const target = index + offset;
+            if (target < 0 || target >= categoryOrder.length) return;
+            [categoryOrder[index], categoryOrder[target]] = [categoryOrder[target], categoryOrder[index]];
+            renderCategoryOrder();
+        }
+
+        async function saveCategoryOrder() {
+            categoryOrderStatusEl.textContent = "Ukládám...";
+            const response = await fetch("/api/category-order", {
+                method: "PUT",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ category_order: categoryOrder }),
+            });
+            if (!response.ok) throw new Error("Pořadí kategorií se nepodařilo uložit.");
+            categoryOrderStatusEl.textContent = "Pořadí uloženo.";
+        }
 
         function setNewTaskStatus(message, kind = "") {
             newTaskStatus.textContent = message;
@@ -578,11 +641,13 @@
 
             const payload = await response.json();
             overridesByPattern = payload.overrides || {};
+            categoryOrder = payload.category_order || [];
             customPatternIds = new Set(Object.keys(payload.custom_patterns || {}));
             Object.assign(basePatternsById, payload.custom_patterns || {});
             updatePatternSelect();
             updateTaskList();
             updateDeleteButton();
+            renderCategoryOrder();
         }
 
         async function loadPattern(patternId) {
@@ -775,6 +840,9 @@
         });
 
         taskFilterEl.addEventListener("input", updateTaskList);
+        saveCategoryOrderBtn.addEventListener("click", () => saveCategoryOrder().catch((error) => {
+            categoryOrderStatusEl.textContent = error.message;
+        }));
 
         newTaskForm.addEventListener("submit", async (event) => {
             event.preventDefault();

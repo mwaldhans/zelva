@@ -301,6 +301,23 @@ def _save_custom_patterns(app: Flask, patterns: dict[str, dict[str, object]]) ->
     db.commit()
 
 
+def _load_category_order() -> list[str]:
+    rows = _get_db().execute(
+        "SELECT category FROM category_order ORDER BY position, category"
+    ).fetchall()
+    return [row["category"] for row in rows]
+
+
+def _save_category_order(categories: list[str]) -> None:
+    db = _get_db()
+    db.execute("DELETE FROM category_order")
+    db.executemany(
+        "INSERT INTO category_order (category, position) VALUES (?, ?)",
+        [(category, position) for position, category in enumerate(categories)],
+    )
+    db.commit()
+
+
 def _get_pattern_override(app: Flask, pattern_id: str) -> dict[str, object]:
     overrides = _load_pattern_overrides(app)
     return dict(overrides.get(pattern_id, {}))
@@ -465,6 +482,14 @@ def _init_db(app: Flask) -> None:
             """
             CREATE TABLE IF NOT EXISTS deleted_patterns (
                 pattern_id TEXT PRIMARY KEY
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS category_order (
+                category TEXT PRIMARY KEY,
+                position INTEGER NOT NULL
             )
             """
         )
@@ -691,7 +716,28 @@ def create_app(test_config: dict | None = None) -> Flask:
             "overrides": _load_pattern_overrides(app),
             "custom_patterns": _load_custom_patterns(app),
             "deleted_patterns": sorted(deleted_patterns),
+            "category_order": _load_category_order(),
         }), 200
+
+    @app.get("/api/category-order")
+    @_admin_required
+    def get_category_order() -> tuple[dict[str, list[str]], int]:
+        return jsonify({"category_order": _load_category_order()}), 200
+
+    @app.put("/api/category-order")
+    @_admin_required
+    def update_category_order() -> tuple[dict[str, list[str]], int]:
+        payload = request.get_json(silent=True) or {}
+        categories = payload.get("category_order")
+        if not isinstance(categories, list) or not all(isinstance(category, str) for category in categories):
+            return jsonify({"error": "Pořadí kategorií musí být seznam názvů."}), 400
+        cleaned = []
+        for category in categories:
+            category = category.strip()
+            if category and category not in cleaned:
+                cleaned.append(category)
+        _save_category_order(cleaned)
+        return jsonify({"category_order": cleaned}), 200
 
     @app.post("/api/custom-patterns")
     @_admin_required
