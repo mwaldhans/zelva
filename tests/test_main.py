@@ -1,7 +1,15 @@
 from pathlib import Path
 import sqlite3
 
-from zelva.app import create_app
+from zelva.app import _is_allowed_login_email, create_app
+
+
+def test_login_email_accepts_root_and_subdomains() -> None:
+    assert _is_allowed_login_email("student@gymnzidlo.cz")
+    assert _is_allowed_login_email("student@class.gymnzidlo.cz")
+    assert _is_allowed_login_email("student@a.class.gymnzidlo.cz")
+    assert not _is_allowed_login_email("student@gymnzidlo.cz.evil.test")
+    assert not _is_allowed_login_email("student@other.cz")
 
 
 def test_home_page_is_available() -> None:

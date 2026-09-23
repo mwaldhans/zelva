@@ -355,6 +355,11 @@ def _is_admin(user: dict[str, str] | None) -> bool:
     return bool(user and user.get("email", "").lower() == admin_email.lower())
 
 
+def _is_allowed_login_email(email: str) -> bool:
+    domain = email.rsplit("@", 1)[-1]
+    return "@" in email and (domain == LOGIN_DOMAIN or domain.endswith(f".{LOGIN_DOMAIN}"))
+
+
 def _admin_required(view):
     @wraps(view)
     def wrapped(*args, **kwargs):
@@ -612,9 +617,9 @@ def create_app(test_config: dict | None = None) -> Flask:
         userinfo = token.get("userinfo") or google.userinfo()
         email = str(userinfo.get("email", "")).strip().lower()
         subject = str(userinfo.get("sub", "")).strip()
-        if not email.endswith(f"@{LOGIN_DOMAIN}") or not subject or not userinfo.get("email_verified", False):
+        if not _is_allowed_login_email(email) or not subject or not userinfo.get("email_verified", False):
             session.clear()
-            return "Přihlásit se mohou pouze ověřené účty z domény gymnzidlo.cz.", 403
+            return "Přihlásit se mohou pouze ověřené účty z domény gymnzidlo.cz nebo jejích subdomén.", 403
 
         session["user"] = {
             "sub": subject,
