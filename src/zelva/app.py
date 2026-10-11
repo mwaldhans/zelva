@@ -429,9 +429,35 @@ def _init_db(app: Flask) -> None:
             )
             """
         )
+        duplicate_rows = conn.execute(
+            """
+            SELECT user_id, pattern_id
+            FROM user_progress
+            GROUP BY user_id, pattern_id
+            HAVING COUNT(*) > 1
+            """
+        ).fetchall()
+        for user_id, pattern_id in duplicate_rows:
+            rows = conn.execute(
+                """
+                SELECT rowid, updated_at
+                FROM user_progress
+                WHERE user_id = ? AND pattern_id = ?
+                ORDER BY updated_at DESC, rowid DESC
+                """,
+                (user_id, pattern_id),
+            ).fetchall()
+            if len(rows) <= 1:
+                continue
+            keep_rowid = rows[0][0]
+            conn.execute(
+                "DELETE FROM user_progress WHERE user_id = ? AND pattern_id = ? AND rowid != ?",
+                (user_id, pattern_id, keep_rowid),
+            )
+
         conn.execute(
             """
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_progress_user_pattern
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_user_progress_user_pattern
             ON user_progress (user_id, pattern_id)
             """
         )

@@ -59,6 +59,57 @@ def test_progress_api_persists_solution(tmp_path: Path) -> None:
     assert load_response.json["items"][0]["solution_text"] == "forward(100)\nleft(90)"
 
 
+def test_progress_api_recreates_missing_unique_index(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(str(db_path))
+    connection.execute(
+        """
+        CREATE TABLE user_progress (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            pattern_id TEXT NOT NULL,
+            solution_text TEXT NOT NULL DEFAULT '',
+            solved INTEGER NOT NULL DEFAULT 0,
+            score REAL NOT NULL DEFAULT 0,
+            user_name TEXT NOT NULL DEFAULT '',
+            user_email TEXT NOT NULL DEFAULT '',
+            time_seconds INTEGER NOT NULL DEFAULT 0,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO user_progress (user_id, pattern_id, solution_text, solved, score, user_name, user_email, time_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("student-1", "square", "forward(100)", 1, 0.8, "Student", "student@gymnzidlo.cz", 5),
+    )
+    connection.execute(
+        "INSERT INTO user_progress (user_id, pattern_id, solution_text, solved, score, user_name, user_email, time_seconds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        ("student-1", "square", "forward(200)", 0, 0.4, "Student", "student@gymnzidlo.cz", 7),
+    )
+    connection.commit()
+    connection.close()
+
+    app = create_app({"TESTING": True, "DATABASE": str(db_path)})
+    client = app.test_client()
+
+    with client.session_transaction() as session:
+        session["user"] = {"sub": "student-1", "email": "student@gymnzidlo.cz"}
+
+    response = client.put(
+        "/api/progress/square",
+        json={
+            "solution_text": "forward(150)",
+            "solved": True,
+            "score": 0.9,
+            "time_seconds": 9,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json["pattern_id"] == "square"
+    assert response.json["solved"] is True
+
+
 def test_progress_is_isolated_per_browser_client(tmp_path: Path) -> None:
     app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "test.db")})
     client_a = app.test_client()
