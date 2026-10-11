@@ -1,0 +1,92 @@
+<!-- File: templates/teacher_dashboard.html -->
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dashboard učitele</title>
+  <!-- Bootstrap 5 CSS -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary">
+    <div class="container-fluid">
+      <a class="navbar-brand" href="#">Výuka Pythonu</a>
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#teacherNav" aria-controls="teacherNav" aria-expanded="false" aria-label="Přepnout navigaci">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="teacherNav">
+        <ul class="navbar-nav ms-auto">
+          <!-- Dropdown Správa -->
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" id="manageDropdown" role="button"
+               data-bs-toggle="dropdown" aria-expanded="false">
+              Správa
+            </a>
+            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="manageDropdown">
+              <li><a class="dropdown-item" href="{{ url_for('python.manage_classes') }}">Správa tříd</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('python.teacher_manage_students') }}">Správa studentů</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('python.teacher_order_sections') }}">Řazení sekcí</a></li>
+            </ul>
+          </li>
+          <!-- Samostatný odkaz na vytvoření úkolu -->
+          <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('python.teacher_create') }}">Vytvořit cvičení</a>
+          </li>
+          <!-- Dropdown Úkoly -->
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" id="tasksDropdown" role="button"
+               data-bs-toggle="dropdown" aria-expanded="false">
+              Úkoly
+            </a>
+            <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="tasksDropdown">
+              <li><a class="dropdown-item" href="{{ url_for('python.teacher_assign_tasks') }}">Nový úkol</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('python.teacher_assigned_grouped') }}">Přehled zadaných úkolů</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('python.teacher_assigned') }}">Správa zadaných úkolů</a></li>
+            </ul>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('python.teacher_submissions') }}">Odevzdání studentů</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('python.teacher_statistics') }}">Statistiky</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link" href="{{ url_for('python.student_dashboard') }}">Studentský dashboard</a>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container mt-4">
+    <h2>Cvičení podle sekcí</h2>
+    {% for section, assignments in grouped.items() %}
+      <h3 class="mt-4">{{ section }}</h3>
+      <div class="list-group mb-4">
+        {% for assignment in assignments %}
+          <div class="list-group-item d-flex justify-content-between align-items-center">
+            <div>
+              <strong>{{ assignment.title }}</strong><br>
+              <small>{{ assignment.description }}</small>
+            </div>
+            <div>
+              <a href="{{ url_for('python.teacher_edit', assignment_id=assignment.id) }}" class="btn btn-sm btn-warning me-1">Upravit</a>
+              <form action="{{ url_for('python.teacher_delete', assignment_id=assignment.id) }}" method="post" class="d-inline">
+                <button type="submit" class="btn btn-sm btn-danger" onclick="return confirm('Opravdu chcete smazat toto cvičení?');">
+                  Smazat
+                </button>
+              </form>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  </div>
+
+  <!-- Bootstrap 5 JS Bundle (Popper integrován) -->
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.2.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

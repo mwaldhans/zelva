@@ -140,6 +140,83 @@ def test_progress_is_isolated_per_browser_client(tmp_path: Path) -> None:
     assert load_a.json["items"][0]["pattern_id"] == "square"
 
 
+def test_python_dashboard_marks_successful_assignments(tmp_path: Path) -> None:
+    python_db = tmp_path / "python.db"
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(python_db),
+    })
+    client = app.test_client()
+    email = "student@gymnzidlo.cz"
+    with client.session_transaction() as session:
+        session["user"] = {"sub": email, "email": email, "name": "Student"}
+
+    conn = sqlite3.connect(python_db)
+    conn.execute(
+        "INSERT INTO assignments (id, title, description, teacher_code, section) "
+        "VALUES (1, 'Hotový úkol', '', '', 'Základy')"
+    )
+    conn.execute(
+        "INSERT INTO submissions "
+        "(assignment_id, student_email, student_code, result, help_used) "
+        "VALUES (1, ?, '', 'Test prošel!', 0)",
+        (email,),
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.get("/python/student")
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "card assignment-card status-success" in html
+    assert "Hotový úkol" in html
+
+    theme = client.get("/static/python-theme.css").get_data(as_text=True)
+    assert ".python-course .card.status-success" in theme
+
+
+def test_student_assignment_prefills_latest_submission(tmp_path: Path) -> None:
+    python_db = tmp_path / "python.db"
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(python_db),
+    })
+    client = app.test_client()
+    email = "student@gymnzidlo.cz"
+    with client.session_transaction() as session:
+        session["user"] = {"sub": email, "email": email, "name": "Student"}
+
+    conn = sqlite3.connect(python_db)
+    conn.execute(
+        "INSERT INTO assignments (id, title, teacher_code, section) "
+        "VALUES (1, 'Testovací úkol', 'def solve():\n    return 1', 'Základy')"
+    )
+    conn.executemany(
+        "INSERT INTO submissions "
+        "(assignment_id, student_email, student_code, result, submission_time) "
+        "VALUES (1, ?, ?, 'Test selhal.', ?)",
+        [
+            (email, "def solve():\n    return 2", "2026-10-10 10:00:00"),
+            (email, "def solve():\n    return 3", "2026-10-11 10:00:00"),
+            ("other@gymnzidlo.cz", "def solve():\n    return 4", "2026-10-12 10:00:00"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    response = client.get("/python/student/assignment/1")
+    html = response.get_data(as_text=True)
+
+    assert response.status_code == 200
+    assert (
+        '<textarea name="student_code" id="student_code" rows="10"\n'
+        '                  class="form-control border-0 p-0">def solve():\n'
+        "    return 3</textarea>"
+    ) in html
+
+
 def test_admin_patterns_persist_in_sqlite(tmp_path: Path) -> None:
     app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "test.db")})
     client = app.test_client()
@@ -203,3 +280,59 @@ def test_admin_patterns_persist_in_sqlite(tmp_path: Path) -> None:
         connection.close()
 
     assert {"pattern_overrides", "custom_patterns"}.issubset(tables)
+
+def _python_app(tmp_path: Path):
+    return create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "z.db"),
+        "PYTHON_DATABASE": str(tmp_path / "p.db"),
+    })
+
+
+def _login(client, email: str) -> None:
+    with client.session_transaction() as session:
+        session["user"] = {"sub": email, "email": email, "name": "Test"}
+
+
+def test_hub_offers_turtle_and_python(tmp_path: Path) -> None:
+    client = _python_app(tmp_path).test_client()
+    _login(client, "student@gymnzidlo.cz")
+
+    html = client.get("/").get_data(as_text=True)
+    assert 'href="/zelva"' in html
+    assert 'href="/python/"' in html
+    turtle_html = client.get("/zelva").get_data(as_text=True)
+    assert "Rozcestn&#237;k" in turtle_html
+    assert 'href="/" ' in turtle_html or 'href="/">Rozcestn&#237;k' in turtle_html
+
+
+def test_python_course_student_and_teacher_roles(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    client = app.test_client()
+
+    assert client.get("/python/").status_code == 302
+    assert "/login" in client.get("/python/").location
+
+    _login(client, "student@gymnzidlo.cz")
+    assert client.get("/python/").location.endswith("/python/student")
+    student_page = client.get("/python/student")
+    assert student_page.status_code == 200
+    assert "python-site-header" in student_page.get_data(as_text=True)
+    assert "Logo Gymnázium Židlochovice" in student_page.get_data(as_text=True)
+    theme = client.get("/static/python-theme.css").get_data(as_text=True)
+    assert ".python-course.bg-light" in theme
+    assert "background: var(--python-panel)" in theme
+    assert "border: 1px solid var(--python-border)" in theme
+    assert client.get("/python/teacher").status_code == 302
+
+    conn = sqlite3.connect(tmp_path / "p.db")
+    assert conn.execute("SELECT COUNT(*) FROM students WHERE email='student@gymnzidlo.cz'").fetchone()[0] == 1
+    conn.close()
+
+    teacher = app.test_client()
+    _login(teacher, app.config["ADMIN_EMAIL"])
+    assert teacher.get("/python/").location.endswith("/python/teacher")
+    for path in ("/python/teacher", "/python/teacher/create", "/python/teacher/statistics",
+                 "/python/teacher/manage_students", "/python/teacher/assigned",
+                 "/python/teacher/submissions"):
+        assert teacher.get(path).status_code == 200, path

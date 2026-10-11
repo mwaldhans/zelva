@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Přehled zadaných úkolů</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Přehled zadaných úkolů</h2>
+    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">← Dashboard učitele</a>
+
+    <!-- Legenda barev -->
+    <div class="mb-3">
+      <span class="badge badge-success">Splněno včas</span>
+      <span class="badge badge-info">Splněno po deadlinu</span>
+      <span class="badge badge-warning">Nesplněno před deadlinem</span>
+      <span class="badge badge-danger">Nesplněno po deadlinu</span>
+    </div>
+
+    {% if data %}
+      {% for group in data %}
+        <div class="card mb-4">
+          <div class="card-header">
+            <strong>{{ group.class_name }}</strong> – deadline 
+            {{ group.deadline.strftime("%d.%m.%Y %H:%M") }}
+          </div>
+          <div class="card-body p-0">
+            <table class="table mb-0">
+              <thead class="thead-light">
+                <tr>
+                  <th>Student</th>
+                  <th>Email</th>
+                  <th class="text-center">Splněno</th>
+                  <th class="text-center">V termínu</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for s in group.students %}
+                  {# barva podle pořadí: #}
+                  {% if s.passed == group.total and s.on_time < s.passed %}
+                    {% set row_class = "table-info" %}
+                  {% elif s.passed == group.total %}
+                    {% set row_class = "table-success" %}
+                  {% elif group.overdue %}
+                    {% set row_class = "table-danger" %}
+                  {% else %}
+                    {% set row_class = "table-warning" %}
+                  {% endif %}
+                  <tr class="{{ row_class }}">
+                    <td>{{ s.name }}</td>
+                    <td>{{ s.email }}</td>
+                    <td class="text-center">
+                      {{ s.passed }} / {{ group.total }}
+                    </td>
+                    <td class="text-center">
+                      {{ s.on_time_count }} / {{ group.total }}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>Žádné přiřazené cvičení.</p>
+    {% endif %}
+
+    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mt-3">Zpět na dashboard</a>
+  </div>
+</body>
+</html>

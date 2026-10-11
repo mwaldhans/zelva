@@ -12,6 +12,8 @@ from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
 from flask import Flask, current_app, g, jsonify, redirect, render_template, request, session, url_for
 
+from . import python_course
+
 
 LOGIN_DOMAIN = "gymnzidlo.cz"
 DEFAULT_ADMIN_EMAIL = "waldhans.m@gymnzidlo.cz"
@@ -624,6 +626,12 @@ def create_app(test_config: dict | None = None) -> Flask:
     _init_db(app)
     app.teardown_appcontext(_close_db)
 
+    teachers = os.getenv("PYTHON_TEACHER_EMAILS", "")
+    app.config.setdefault("PYTHON_DATABASE", os.getenv("PYTHON_DATABASE") or None)
+    app.config.setdefault("PYTHON_TEACHER_EMAILS", [e for e in teachers.split(",") if e.strip()])
+    app.register_blueprint(python_course.bp)
+    python_course.init_python_db(app)
+
     @app.before_request
     def require_login() -> object | None:
         public_endpoints = {"login", "login_google", "auth_callback", "logout", "health", "static"}
@@ -706,6 +714,10 @@ def create_app(test_config: dict | None = None) -> Flask:
 
     @app.get("/")
     def index() -> str:
+        return render_template("hub.html")
+
+    @app.get("/zelva")
+    def turtle() -> str:
         return render_template("index.html")
 
     @app.get("/sandbox")

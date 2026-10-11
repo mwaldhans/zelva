@@ -112,3 +112,13 @@ sudo systemctl status zelva
 source .venv/bin/activate
 pytest
 ```
+
+## Programování v Pythonu
+
+Po přihlášení se zobrazí rozcestník (`/`): **Želva** (`/zelva`) nebo **Programování v Pythonu** (`/python/`).
+Modul (`src/zelva/python_course.py`) používá přihlášení přes Google z hlavní aplikace.
+
+- Data jsou v samostatné SQLite DB `src/instance/python.db` (cesta jde změnit proměnnou `PYTHON_DATABASE`).
+- Učitelé: admin (`ADMIN_EMAIL`) a e-maily v `PYTHON_TEACHER_EMAILS` (oddělené čárkou); ostatní jsou studenti.
+- Z původní databáze `pzthon2026` byla importována cvičení (tabulka `assignments`); žákovské účty, odevzdání a třídy se nepřenášejí. Nekopíruj proto celou starou `database.db` přes `python.db`. Před importem dalších dat vždy nejdřív zazálohuj cílovou databázi.
+- Pozor: kód studentů se spouští na serveru přes `subprocess` (timeout 5 s, bez sandboxu).

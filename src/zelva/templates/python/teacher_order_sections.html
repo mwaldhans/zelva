@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Uspořádat sekce</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Uspořádat sekce</h2>
+    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
+    <p>Níže jsou zobrazeny sekce, které jsou použity v assignments. Změňte hodnoty v poli "Pořadí" a klikněte na tlačítko "Uložit pořadí". Změny se neuloží, dokud nekliknete na tlačítko.</p>
+    
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="alert alert-info">
+          {% for message in messages %}
+            <p>{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    
+    <form method="post">
+        <table class="table table-bordered">
+            <thead>
+                <tr>
+                    <th>Sekce</th>
+                    <th>Pořadí</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for section in sections %}
+                <tr>
+                    <td>{{ section.section }}</td>
+                    <td>
+                        <input type="number" name="order_{{ section.section }}" value="{{ section.section_order }}" class="form-control">
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        <button type="submit" class="btn btn-primary">Uložit pořadí</button>
+        <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary ml-2">Zpět na dashboard</a>
+    </form>
+</div>
+</body>
+</html>

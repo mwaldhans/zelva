@@ -1008,3 +1008,9 @@ canvas {
         padding: 0.5rem 0.7rem;
     }
 }
+
+.hub-main { max-width: 860px; margin: 40px auto; padding: 0 16px; text-align: center; }
+.hub-cards { display: flex; gap: 24px; flex-wrap: wrap; justify-content: center; margin-top: 24px; }
+.hub-card { flex: 1 1 300px; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 28px 20px; color: var(--ink); text-decoration: none; box-shadow: 0 2px 8px rgba(0,0,0,.06); transition: transform .15s, border-color .15s; }
+.hub-card:hover { transform: translateY(-3px); border-color: var(--accent-soft); }
+.hub-card-icon { font-size: 3rem; display: block; }

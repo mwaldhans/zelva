@@ -1,0 +1,126 @@
+<!-- File: templates/teacher_edit.html -->
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Editace cvičení</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+  <!-- CodeMirror styly -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/theme/dracula.min.css">
+  <!-- Lint addon styly -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/addon/lint/lint.css">
+  <style>
+    .CodeMirror {
+      border: 1px solid #dee2e6;
+      min-height: 150px;
+    }
+  </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+  <h2>Editace cvičení</h2>
+  <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
+  <form method="post" action="{{ url_for('python.teacher_edit', assignment_id=assignment.id) }}">
+    <input type="hidden"
+       name="section_order"
+       value="{{ assignment.section_order or 0 }}">
+    <div class="form-group">
+      <label>Název cvičení</label>
+      <input type="text" name="title" class="form-control" value="{{ assignment.title }}" required>
+    </div>
+    <div class="form-group">
+      <label>Popis</label>
+      <textarea name="description" class="form-control" rows="3" required>{{ assignment.description }}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Sekce</label>
+      <input type="text" name="section" class="form-control" value="{{ assignment.section }}" required>
+    </div>
+    <div class="form-group">
+      <label>Pořadí cvičení (display_order)</label>
+      <input type="number" name="display_order" class="form-control" value="{{ assignment.display_order or 0 }}">
+    </div>
+    <div class="form-group">
+      <label>Nápověda</label>
+      <textarea name="help_text" class="form-control" rows="3" placeholder="Zadejte nápovědu">{{ assignment.help_text or '' }}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Učitelský kód (funkce)</label>
+      <textarea name="teacher_code" id="teacher_code" class="form-control" rows="8" required>{{ assignment.teacher_code }}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Počet řádků kopírovaných studentovi</label>
+      <input type="number" name="precopy_lines" id="precopy_lines" class="form-control" value="{{ assignment.precopy_lines or 1 }}" min="0">
+    </div>
+    <div class="form-group">
+      <label>Testovací volání pro „Spustit test“</label>
+      <textarea name="test_call_run" id="test_call_run" class="form-control" rows="3" placeholder='Např.: vypis("Hello")'>{{ assignment.test_call_run }}</textarea>
+    </div>
+    <div class="form-group">
+      <label>Testovací volání pro „Odevzdat kód“ (oddělené středníkem)</label>
+      <textarea name="test_call_submit" id="test_call_submit" class="form-control" rows="3" placeholder='Např.: vypis("Test1"); vypis("Test2")'>{{ assignment.test_call_submit }}</textarea>
+    </div>
+    <button type="submit" class="btn btn-primary">Uložit změny</button>
+  </form>
+</div>
+
+<!-- Načtení CodeMirror knihoven a addonů -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/addon/lint/lint.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.12/addon/display/autoresize.min.js"></script>
+<script>
+  CodeMirror.registerHelper("lint", "python", function(text) {
+    var found = [];
+    var lines = text.split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i];
+      var indentMatch = line.match(/^( *)/);
+      if (indentMatch) {
+        var indent = indentMatch[1].length;
+        if (line.trim() !== "" && indent % 4 !== 0) {
+          found.push({
+            from: CodeMirror.Pos(i, 0),
+            to: CodeMirror.Pos(i, indent),
+            message: "Odsazení by mělo být násobkem 4 mezer."
+          });
+        }
+      }
+      var singleQuoteCount = 0, doubleQuoteCount = 0;
+      for (var j = 0; j < line.length; j++) {
+        var ch = line[j];
+        if (ch === "'" && (j === 0 || line[j-1] !== '\\')) singleQuoteCount++;
+        else if (ch === '"' && (j === 0 || line[j-1] !== '\\')) doubleQuoteCount++;
+      }
+      if (singleQuoteCount % 2 !== 0) found.push({ from: CodeMirror.Pos(i, line.lastIndexOf("'")), to: CodeMirror.Pos(i, line.length), message: "Neuzavřená jednoduchá uvozovka." });
+      if (doubleQuoteCount % 2 !== 0) found.push({ from: CodeMirror.Pos(i, line.lastIndexOf('"')), to: CodeMirror.Pos(i, line.length), message: "Neuzavřená dvojitá uvozovka." });
+      var stack = [];
+      for (var j = 0; j < line.length; j++) {
+        var ch = line[j];
+        if (ch === '(' || ch === '[' || ch === '{') stack.push({ char: ch, pos: j });
+        else if (ch === ')' || ch === ']' || ch === '}') {
+          if (!stack.length) found.push({ from: CodeMirror.Pos(i, j), to: CodeMirror.Pos(i, j+1), message: "Neočekávaná závorka: " + ch });
+          else {
+            var last = stack.pop();
+            if ((last.char === '(' && ch !== ')') || (last.char === '[' && ch !== ']') || (last.char === '{' && ch !== '}')) {
+              found.push({ from: CodeMirror.Pos(i, last.pos), to: CodeMirror.Pos(i, j+1), message: "Neodpovídající závorka: " + last.char + " vs. " + ch });
+            }
+          }
+        }
+      }
+      while (stack.length) {
+        var unclosed = stack.pop();
+        found.push({ from: CodeMirror.Pos(i, unclosed.pos), to: CodeMirror.Pos(i, line.length), message: "Neuzavřená závorka: " + unclosed.char });
+      }
+    }
+    return found;
+  });
+  var teacherEditor = CodeMirror.fromTextArea(document.getElementById("teacher_code"), { mode: "python", theme: "dracula", lineNumbers: true, indentUnit: 4, tabSize: 4, indentWithTabs: false, lint: true, gutters: ["CodeMirror-lint-markers"] });
+  var runEditor     = CodeMirror.fromTextArea(document.getElementById("test_call_run"), { mode:"python", theme:"dracula", lineNumbers:true, indentWithTabs:false, lint:true, gutters:["CodeMirror-lint-markers"], autoResize:true, viewportMargin:Infinity }); runEditor.setSize(null,60);
+  var submitEditor  = CodeMirror.fromTextArea(document.getElementById("test_call_submit"), { mode:"python", theme:"dracula", lineNumbers:true, indentWithTabs:false, lint:true, gutters:["CodeMirror-lint-markers"], autoResize:true, viewportMargin:Infinity }); submitEditor.setSize(null,60);
+</script>
+</body>
+</html>

@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rozcestník | Gymnázium Židlochovice</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+    <header class="school-header">
+        <div class="school-header-inner">
+            <a class="school-brand" href="https://gymnzidlo.cz/" target="_blank" rel="noopener noreferrer">
+                <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnázium Židlochovice">
+            </a>
+            <nav class="site-nav" aria-label="Hlavní menu">
+                {% if current_user %}<a class="site-nav-link" href="{{ url_for('logout') }}">Odhlásit {{ current_user.email }}</a>{% endif %}
+            </nav>
+        </div>
+    </header>
+    <main class="hub-main">
+        <h1>Co chcete dělat?</h1>
+        <div class="hub-cards">
+            <a class="hub-card" href="{{ url_for('turtle') }}">
+                <span class="hub-card-icon" aria-hidden="true">🐢</span>
+                <h2>Želva</h2>
+                <p>Želví grafika – kreslení pomocí příkazů.</p>
+            </a>
+            <a class="hub-card" href="{{ url_for('python.home') }}">
+                <span class="hub-card-icon" aria-hidden="true">🐍</span>
+                <h2>Programování v Pythonu</h2>
+                <p>Úlohy, odevzdávání a přehledy.</p>
+            </a>
+        </div>
+    </main>
+    <footer class="app-footer"><span class="footer-owner">© 2026 Marek Waldhans</span></footer>
+</body>
+</html>

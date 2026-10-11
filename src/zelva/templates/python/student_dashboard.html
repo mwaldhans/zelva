@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Dashboard studenta</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <style>
+        .status-success       { background-color: #d4edda; }
+        .status-success-help  { background-color: #add8e6; }
+        .status-failure       { background-color: #f8d7da; }
+        .status-notattempted  { background-color: #e2e3e5; }
+        .assignment-card      { margin-bottom: 15px; }
+    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Tvůj dashboard</h2>
+    <p>Přihlášený jako: <strong>{{ session['username'] }}</strong></p>
+    {% if session.get('role') == 'teacher' %}
+        <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-warning mb-3">Učitelský dashboard</a>
+    {% endif %}
+
+    {# Přiřazené úkoly #}
+    {% if assigned %}
+      <h3 class="mt-4">Přiřazené úkoly</h3>
+      <table class="table table-bordered">
+        <thead class="thead-dark">
+          <tr>
+            <th>Cvičení</th>
+            <th>Sekce</th>
+            <th>Deadline</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for a in assigned %}
+            {# zjistíme, zda už student úkol úspěšně dokončil #}
+            {% set attempts = student_submissions
+                 | selectattr("assignment_id","equalto", a.assignment_id)
+                 | list %}
+            {% set passed = attempts
+                 | selectattr("result","search","Test prošel!")
+                 | list %}
+            {% set completed = passed|length > 0 %}
+            {# pokud je po deadlinu a zároveň dokončený, nefiltrujeme #}
+            {% if not (completed and a.overdue) %}
+              <tr class="{% if completed %}table-success{% elif a.overdue %}table-danger{% else %}table-warning{% endif %}">
+                <td>
+                  <a href="{{ url_for('python.student_assignment', assignment_id=a.assignment_id) }}">
+                    {{ a.title }}
+                  </a>
+                </td>
+                <td>{{ a.section }}</td>
+                <td>{{ a.deadline | format_datetime }}</td>
+                <td>
+                  {% if completed %}
+                    Splněno
+                  {% elif a.overdue %}
+                    Nesplněno (po termínu)
+                  {% else %}
+                    Nesplněno
+                  {% endif %}
+                </td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    {# Cvičení podle sekcí #}
+    {% for section in ordered_sections %}
+        <h3 class="mt-4">{{ section }}</h3>
+        <div class="row">
+          {% for assignment in grouped[section] %}
+            {% set subs = student_submissions
+                 | selectattr("assignment_id","equalto", assignment.id)
+                 | list %}
+            {% set passed_no_help = subs
+                 | selectattr("result","search","Test prošel!")
+                 | selectattr("help_used","equalto", 0)
+                 | list %}
+            {% set passed_with_help = subs
+                 | selectattr("result","search","Test prošel!")
+                 | selectattr("help_used","equalto", 1)
+                 | list %}
+            {% if passed_no_help|length > 0 %}
+              {% set status = "status-success" %}
+            {% elif passed_with_help|length > 0 %}
+              {% set status = "status-success-help" %}
+            {% elif subs|length > 0 %}
+              {% set status = "status-failure" %}
+            {% else %}
+              {% set status = "status-notattempted" %}
+            {% endif %}
+            <div class="col-md-4">
+              <div class="card assignment-card {{ status }}">
+                <div class="card-body">
+                  <h5 class="card-title">{{ assignment.title }}</h5>
+                  <a href="{{ url_for('python.student_assignment', assignment_id=assignment.id) }}"
+                     class="btn btn-primary">Vyřešit úkol</a>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+    {% endfor %}
+</div>
+
+<script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

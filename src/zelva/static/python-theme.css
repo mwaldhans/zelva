@@ -1,0 +1,236 @@
+.python-course {
+    --python-bg: #f6f9e8;
+    --python-ink: #212529;
+    --python-panel: #fff;
+    --python-accent: #bccc34;
+    --python-accent-dark: #879823;
+    --python-border: #d9e2a9;
+    min-height: 100vh;
+    color: var(--python-ink);
+    background:
+        radial-gradient(circle at top left, rgba(188, 204, 52, 0.18), transparent 30%),
+        radial-gradient(circle at right 8%, rgba(168, 185, 47, 0.1), transparent 22%),
+        var(--python-bg) !important;
+}
+
+.python-course > .container {
+    margin-top: 1.5rem !important;
+    margin-bottom: 1.5rem;
+    padding: 1.5rem;
+    border: 1px solid var(--python-border);
+    border-radius: 16px;
+    background: var(--python-panel);
+    box-shadow: 0 14px 34px rgba(134, 146, 32, 0.14);
+}
+
+.python-site-header {
+    background: linear-gradient(135deg, #d4e35f, #bccc34 68%, #a8b92f);
+    color: #243109;
+    border-bottom: 4px solid #a8b92f;
+}
+
+.python-site-header-inner {
+    max-width: 1460px;
+    min-height: 82px;
+    margin: 0 auto;
+    padding: 0.7rem 1.5rem;
+    display: flex;
+    gap: 1rem;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.python-site-brand {
+    display: flex;
+    align-items: center;
+}
+
+.python-site-brand img {
+    display: block;
+    width: 232px;
+    height: auto;
+}
+
+.python-site-nav {
+    margin-left: auto;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.55rem;
+    align-items: center;
+}
+
+.python-site-nav a {
+    display: inline-flex;
+    min-height: 2.4rem;
+    padding: 0.45rem 0.9rem;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(31, 42, 7, 0.24);
+    border-radius: 999px;
+    background: rgba(31, 42, 7, 0.1);
+    color: #1f2a07 !important;
+    text-decoration: none;
+    font-weight: 700;
+}
+
+.python-site-nav a:hover {
+    background: rgba(31, 42, 7, 0.17);
+    color: #1f2a07;
+}
+
+.python-course a:not(.btn):not(.dropdown-item) {
+    color: var(--python-accent-dark);
+}
+
+.python-course a:not(.btn):not(.dropdown-item):hover {
+    color: #596816;
+}
+
+.python-course .hub-back-link {
+    background: linear-gradient(135deg, #d4e35f, var(--python-accent) 68%, #a8b92f) !important;
+    border-bottom: 1px solid var(--python-border);
+}
+
+.python-course .hub-back-link a {
+    color: #1f2a07 !important;
+}
+
+.python-course .navbar-dark.bg-primary,
+.python-course nav.navbar.bg-primary {
+    background: linear-gradient(135deg, #bccc34, #a8b92f) !important;
+}
+
+.python-course .navbar-dark .navbar-brand,
+.python-course .navbar-dark .navbar-nav .nav-link {
+    color: #1f2a07;
+}
+
+.python-course .navbar-dark .navbar-brand:hover,
+.python-course .navbar-dark .navbar-nav .nav-link:hover {
+    color: #000;
+}
+
+.python-course .navbar-dark .navbar-toggler {
+    border-color: rgba(31, 42, 7, 0.35);
+}
+
+.python-course .navbar-dark .navbar-toggler-icon {
+    filter: brightness(0.25);
+}
+
+.python-course .dropdown-menu,
+.python-course .card,
+.python-course .list-group-item,
+.python-course .modal-content {
+    background-color: var(--python-panel);
+    border-color: var(--python-border);
+}
+
+.python-course .card.status-success {
+    background-color: #e7efc8;
+}
+
+.python-course .card.status-success-help {
+    background-color: #dce8a0;
+}
+
+.python-course .card.status-failure {
+    background-color: #f7e1d8;
+}
+
+.python-course .card.status-notattempted {
+    background-color: #f7f1e6;
+}
+
+.python-course .btn-primary,
+.python-course .btn-warning {
+    color: #1f2a07;
+    background-color: var(--python-accent);
+    border-color: var(--python-accent-dark);
+}
+
+.python-course .btn-primary:hover,
+.python-course .btn-warning:hover {
+    color: #1f2a07;
+    background-color: #a8b92f;
+    border-color: #879823;
+}
+
+.python-course .btn-info {
+    color: #1f2a07;
+    background-color: #d4e35f;
+    border-color: #a8b92f;
+}
+
+.python-course .btn-secondary {
+    color: #1f2a07;
+    background-color: #e8edc9;
+    border-color: #c9d39a;
+}
+
+.python-course .btn-danger {
+    color: #542020;
+    background-color: #f1d3c8;
+    border-color: #d6a89a;
+}
+
+.python-course .btn-success {
+    color: #20300b;
+    background-color: #dce8a0;
+    border-color: #bccc34;
+}
+
+.python-course .table thead.thead-dark th {
+    color: #1f2a07;
+    background-color: #e4ecb4;
+    border-color: #c9d39a;
+}
+
+.python-course .table-bordered th,
+.python-course .table-bordered td,
+.python-course .table thead th {
+    border-color: var(--python-border);
+}
+
+.python-course .table-warning,
+.python-course .alert-warning {
+    background-color: #f7f1e6;
+    border-color: #e2d2b8;
+}
+
+.python-course .table-success,
+.python-course .alert-success {
+    background-color: #e7efc8;
+    border-color: #c9d39a;
+}
+
+.python-course.bg-light {
+    background-color: var(--python-bg) !important;
+}
+
+.python-course .form-control:focus,
+.python-course .custom-select:focus {
+    border-color: #bccc34;
+    box-shadow: 0 0 0 0.2rem rgba(188, 204, 52, 0.25);
+}
+
+.python-course nav.navbar.navbar-dark.bg-primary {
+    background: linear-gradient(135deg, #d4e35f, #bccc34 68%, #a8b92f) !important;
+    border-bottom: 1px solid #a8b92f;
+}
+
+.python-course .navbar-dark .navbar-nav .nav-link {
+    display: block;
+    margin: 0.15rem;
+    padding: 0.45rem 0.75rem;
+    border: 1px solid rgba(31, 42, 7, 0.18);
+    border-radius: 999px;
+    background: rgba(31, 42, 7, 0.08);
+    font-weight: 600;
+}
+
+.python-course .navbar-dark .navbar-nav .nav-link:hover,
+.python-course .navbar-dark .navbar-nav .show > .nav-link {
+    background: rgba(31, 42, 7, 0.16);
+}

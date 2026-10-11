@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Změna třídy</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Změna třídy</h2>
+    <a href="{{ url_for('python.student_dashboard') }}" class="btn btn-secondary mt-3">Zpět na dashboard</a>
+    <p>Vyberte si svou třídu. Třídu můžete nastavit pouze jednou.</p>
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="alert alert-info">
+          {% for message in messages %}
+            <p>{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    <form method="post">
+        <div class="form-group">
+            <label>Vyberte si třídu:</label>
+            <select name="class_id" class="form-control">
+                {% for c in classes %}
+                <option value="{{ c.id }}">{{ c.name }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Nastavit třídu</button>
+    </form>
+    <a href="{{ url_for('python.student_dashboard') }}" class="btn btn-secondary mt-3">Zpět na dashboard</a>
+</div>
+</body>
+</html>

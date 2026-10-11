@@ -1,0 +1,73 @@
+<!-- File: templates/teacher_assign.html -->
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Nový úkol</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Vytvořit třídám úkol</h2>
+    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
+    <form method="post">
+      <div class="form-group">
+        <label for="section_select">Sekce</label>
+        <select id="section_select" class="form-control" required>
+          <option value="" disabled selected>-- vyberte sekci --</option>
+          {% for group in assignments|groupby('section') %}
+          <option value="{{ group.grouper }}">{{ group.grouper }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="assignment_ids">Cvičení</label>
+        <select name="assignment_ids" id="assignment_ids" class="form-control" multiple required disabled>
+          <!-- zde se JS načtou možnosti podle vybrané sekce -->
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="class_ids">Třídy</label>
+        <select name="class_ids" id="class_ids" class="form-control" multiple required>
+          {% for c in classes %}
+          <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="deadline">Deadline</label>
+        <input type="datetime-local" name="deadline" id="deadline" class="form-control" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Vytvořit úkol</button>
+    </form>
+  </div>
+
+  <script>
+    // Připravíme si seznam cvičení
+    const exercises = [
+      {% for a in assignments %}
+      { id: {{ a.id }}, title: `{{ a.title }}`, section: `{{ a.section }}` }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    ];
+
+    const sectionSelect = document.getElementById('section_select');
+    const exerciseSelect = document.getElementById('assignment_ids');
+
+    sectionSelect.addEventListener('change', () => {
+      const sel = sectionSelect.value;
+      exerciseSelect.innerHTML = '';
+      exerciseSelect.disabled = false;
+      exercises
+        .filter(e => e.section === sel)
+        .forEach(e => {
+          const opt = document.createElement('option');
+          opt.value = e.id;
+          opt.textContent = e.title;
+          exerciseSelect.appendChild(opt);
+        });
+    });
+  </script>
+</body>
+</html>

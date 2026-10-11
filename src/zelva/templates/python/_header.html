@@ -1,0 +1,11 @@
+<header class="python-site-header">
+    <div class="python-site-header-inner">
+        <a class="python-site-brand" href="https://gymnzidlo.cz/" target="_blank" rel="noopener noreferrer">
+            <img src="{{ url_for('static', filename='img/logo.svg') }}" alt="Logo Gymnázium Židlochovice">
+        </a>
+        <nav class="python-site-nav" aria-label="Hlavní menu">
+            <a href="{{ url_for('index') }}">Rozcestník</a>
+            <a href="{{ url_for('logout') }}">Odhlásit {{ current_user.email }}</a>
+        </nav>
+    </div>
+</header>

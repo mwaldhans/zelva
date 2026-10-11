@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Detaily odevzdání</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+  <style>
+    .success { background-color: #d4edda; }
+    .success-blue { background-color: #add8e6; }
+    .failure { background-color: #f8d7da; }
+  </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+  <h2>Detaily odevzdání</h2>
+  <a href="{{ url_for('python.teacher_statistics') }}" class="btn btn-secondary mb-3">Zpět na statistiky</a>
+  <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
+  <p><strong>Úkol ID:</strong> {{ assignment_id }} | <strong>Student:</strong> {{ student_email }}</p>
+  {% if submissions %}
+  <table class="table table-bordered">
+    <thead class="thead-dark">
+      <tr>
+        <th>Čas</th>
+        <th>Kód</th>
+        <th>Výsledek</th>
+        <th>Výstup učitelského kódu</th>
+        <th>Výstup studenta</th>
+        <th>Nápověda</th>
+        <th>Čas řešení (s)</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for sub in submissions %}
+      {% if "Test prošel!" in sub.result %}
+          {% if sub.help_used == 1 %}
+              {% set row_class = "success-blue" %}
+              {% set help_text = "Ano" %}
+          {% else %}
+              {% set row_class = "success" %}
+              {% set help_text = "Ne" %}
+          {% endif %}
+      {% else %}
+          {% set row_class = "failure" %}
+          {% set help_text = "Ano" if sub.help_used == 1 else "Ne" %}
+      {% endif %}
+      <tr class="{{ row_class }}">
+        <td>{{ sub.submission_time | localize_time }}</td>
+        <td><pre>{{ sub.student_code }}</pre></td>
+        <td>{{ sub.result|safe }}</td>
+        <td><pre>{{ sub.teacher_output }}</pre></td>
+        <td><pre>{{ sub.student_output }}</pre></td>
+        <td>{{ help_text }}</td>
+        <td>{{ sub.time_taken }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p>Nebylo nalezeno žádné odevzdání.</p>
+  {% endif %}
+  <a href="{{ url_for('python.teacher_statistics') }}" class="btn btn-secondary mt-3">Zpět na statistiky</a>
+  <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mt-3">Zpět na dashboard</a>
+</div>
+</body>
+</html>

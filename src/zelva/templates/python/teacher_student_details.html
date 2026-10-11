@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Detaily studenta</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <style>
+      .success { background-color: #d4edda; }
+    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Detaily studenta: {{ student.name }}</h2>
+    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
+    <a href="{{ url_for('python.teacher_manage_students') }}" class="btn btn-secondary mb-3">Zpět na správu studentů</a>
+    <h3>Úspěšně vyřešené úkoly</h3>
+    {% if submissions %}
+    <table class="table table-bordered">
+        <thead class="thead-dark">
+            <tr>
+                <th>Úkol</th>
+                <th>Čas</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for sub in submissions %}
+            <tr class="success">
+                <td>{{ sub.assignment_title }}</td>
+                <td>{{ sub.submission_time | localize_time }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p>Žádné úspěšné odevzdání.</p>
+    {% endif %}
+</div>
+</body>
+</html>

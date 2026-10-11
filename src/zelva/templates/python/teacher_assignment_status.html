@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Stav úkolu – {{ meta.exercise }} / {{ meta.class_name }}</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Stav úkolu</h2>
+    <p>
+      <strong>Cvičení:</strong> {{ meta.exercise }}<br>
+      <strong>Třída:</strong> {{ meta.class_name }}<br>
+      <strong>Deadline:</strong> {{ meta.deadline|format_datetime }}
+    </p>
+    <a href="{{ url_for('python.teacher_assigned') }}" class="btn btn-secondary mb-3">← Zpět na zadaná cvičení</a>
+
+    {% if rows %}
+    <table class="table table-bordered">
+      <thead class="thead-dark">
+        <tr>
+          <th>Student</th>
+          <th>Email</th>
+          <th>Status</th>
+          <th>Datum splnění</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr class="{% if r.submission_time %}table-success{% else %}table-danger{% endif %}">
+          <td>{{ r.name }}</td>
+          <td>{{ r.email }}</td>
+          <td>{% if r.submission_time %}Splněno{% else %}Nesplněno{% endif %}</td>
+          <td>{% if r.submission_time %}{{ r.submission_time|format_datetime }}{% else %}-{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+      <p>V této třídě nejsou žádní studenti.</p>
+    {% endif %}
+  </div>
+</body>
+</html>

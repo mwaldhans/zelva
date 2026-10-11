@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <title>Správa studentů</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+    <h2>Správa studentů</h2>
+    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
+    <a href="{{ url_for('python.teacher_create_class') }}" class="btn btn-primary mb-3">Vytvořit novou třídu</a>
+    <table class="table table-bordered">
+        <thead class="thead-dark">
+            <tr>
+                <th>Email</th>
+                <th>Jméno</th>
+                <th>Třída</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for student in students %}
+            <tr>
+                <td>{{ student.email }}</td>
+                <td>{{ student.name }}</td>
+                <td>
+                    <form method="post" class="form-inline">
+                        <input type="hidden" name="student_email" value="{{ student.email }}">
+                        <select name="class_id" class="form-control mr-2">
+                            <option value="">Nezařadit</option>
+                            {% for cl in classes %}
+                            <option value="{{ cl.id }}" {% if student.class_id == cl.id %}selected{% endif %}>{{ cl.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-sm btn-primary">Uložit</button>
+                    </form>
+                    <a href="{{ url_for('python.teacher_student_details', student_id=student.id) }}" class="btn btn-sm btn-info mt-1">Detaily</a>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+</body>
+</html>

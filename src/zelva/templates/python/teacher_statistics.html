@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+  <meta charset="UTF-8">
+  <title>Statistiky dokončení cvičení</title>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+  <style>
+    .cell-green { background-color: #d4edda; width: 30px; height: 30px; display: inline-block; }
+    .cell-blue  { background-color: #add8e6; width: 30px; height: 30px; display: inline-block; }
+    .cell-red   { background-color: #f8d7da; width: 30px; height: 30px; display: inline-block; }
+    .cell-gray  { background-color: #e2e3e5; width: 30px; height: 30px; display: inline-block; }
+    td, th { text-align: center; vertical-align: middle; }
+    select { min-width: 30px; margin-right: 10px; }
+  </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<div class="container mt-4">
+  <h2>Statistiky dokončení cvičení</h2>
+  <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
+  
+  <!-- Filtrační formulář, filtry vedle sebe -->
+  <form method="get" class="form-inline mb-3">
+    <div class="form-group">
+      <label for="class_id" class="mr-2">Třída:</label>
+      <select name="class_id" id="class_id" class="form-control" multiple>
+        {% for cl in classes %}
+          <option value="{{ cl.id }}" {% if cl.id|string in selected_class_ids %}selected{% endif %}>
+            {{ cl.name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="student_email" class="mr-2">Student:</label>
+      <select name="student_email" id="student_email" class="form-control" multiple>
+        {% for student in students %}
+          <option value="{{ student.email }}" {% if student.email in selected_student_emails %}selected{% endif %}>
+            {{ student.email }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="section" class="mr-2">Sekce:</label>
+      <select name="section" id="section" class="form-control" multiple>
+        {% for sec in sections_all %}
+          <option value="{{ sec.section }}" {% if sec.section in selected_sections %}selected{% endif %}>
+            {{ sec.section }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="assignment_id" class="mr-2">Cvičení:</label>
+      <select name="assignment_id" id="assignment_id" class="form-control" multiple>
+        {% for a in all_assignments %}
+          <option value="{{ a.id }}" {% if a.id|string in selected_assignment_ids %}selected{% endif %}>
+            {{ a.title }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <p><br>
+      <button type="submit" class="btn btn-primary">Filtrovat</button>
+      <a href="{{ url_for('python.teacher_statistics') }}" class="btn btn-warning ml-2">Zrušit všechny filtry</a>
+    </p>
+  </form>
+  
+  <div class="alert alert-info">
+    <h5>Celkové statistiky aktuálně vyfiltrovaných cvičení</h5>
+    <p>
+      Úspěšných: {{ global_success }} / Neúspěšných: {{ global_failures }}<br>
+      Podíl úspěšnosti: {{ global_ratio }}<br>
+      <strong>Průměrný čas řešení: {{ global_avg_time }} s</strong>
+    </p>
+  </div>
+  
+  <table class="table table-bordered">
+    <thead class="thead-dark">
+      <tr>
+        <th>Cvičení (Sekce)</th>
+        {% for student in students %}
+          <th>{{ student.name }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for assignment in assignments %}
+      <tr>
+        <td>
+          {{ assignment.title }}<br>
+          <small>{{ assignment.section }}</small><br>
+          <small>
+            Úspěšných (bez nápovědy): {{ assignment_stats[assignment.id].success_no_help }}<br>
+            Úspěšných (s nápovědou): {{ assignment_stats[assignment.id].success_with_help }}<br>
+            Neúspěšných: {{ assignment_stats[assignment.id].failures }}<br>
+            Podíl: {{ assignment_stats[assignment.id].ratio }}<br>
+            <strong>Průměrný čas řešení: {{ assignment_stats[assignment.id].avg_time }} s</strong>
+          </small>
+        </td>
+        {% for student in students %}
+          {% set cell = stats[assignment.id].get(student.email, {'color':'gray'}) %}
+          <td>
+            <a href="{{ url_for('python.teacher_submission_cell') }}?assignment_id={{ assignment.id }}&student_email={{ student.email }}">
+              {% if cell.color == "green" %}
+                <div class="cell-green"></div>
+              {% elif cell.color == "blue" %}
+                <div class="cell-blue"></div>
+              {% elif cell.color == "red" %}
+                <div class="cell-red"></div>
+              {% else %}
+                <div class="cell-gray"></div>
+              {% endif %}
+            </a>
+          </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  
+  <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mt-3">Zpět na dashboard</a>
+</div>
+</body>
+</html>
