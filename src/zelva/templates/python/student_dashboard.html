@@ -19,6 +19,9 @@
         details.box > summary::before { content: "▸"; display: inline-block; width: 1.1em; transition: transform .15s; }
         details.box[open] > summary::before { transform: rotate(90deg); }
         details.box > summary .meta { margin-left: auto; font-weight: 400; font-size: .8rem; color: #6c757d; }
+        details.box.box-done > summary { background: #d9f0e0; border-left: 5px solid #2e9d4f; border-radius: .25rem .25rem 0 0; }
+        .done-badge { margin-left: .6rem; font-size: .75rem; font-weight: 600; color: #1f7a3a !important; background: #d9f0e0; padding: .05rem .5rem; border-radius: 999px; }
+        .progress-badge { margin-left: .6rem; font-size: .75rem; font-weight: 600; background: #eceff1; padding: .05rem .5rem; border-radius: 999px; }
         .box-body { padding: .3rem .7rem .6rem; }
         .chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; padding-top: .75rem; }
         .chip { position: relative; display: flex; align-items: center; justify-content: flex-start; text-align: left; min-height: 84px; padding: .8rem 2.2rem .8rem 1rem; border: 1px solid rgba(0,0,0,.08); border-left: 6px solid; border-radius: .75rem; color: #000; text-decoration: none; font-family: "Trebuchet MS", "Segoe UI", Verdana, sans-serif; font-size: 1.1rem; font-weight: 700; line-height: 1.25; word-break: break-word; box-shadow: 0 1px 3px rgba(0,0,0,.08); transition: transform .12s, box-shadow .12s; }
@@ -54,6 +57,7 @@
             <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(false)">Sbalit vše</button>
         </span>
     </div>
+    <p class="small mb-2" style="opacity:.8">Klikni na sekci, ať se rozbalí. Cvičení otevřeš kliknutím na kartu. Barva ukazuje stav: zelená = splněno, modrá = splněno s nápovědou, červená = nepovedlo se, šedá = nezkoušeno.</p>
 
     {# Přiřazené úkoly #}
     {% if assigned %}
@@ -95,7 +99,7 @@
 
     {# Cvičení podle sekcí #}
     {% for section in ordered_sections %}
-      {% set sec = namespace(done=0, items=[]) %}
+      {% set sec = namespace(done=0, items=[], req=0, req_done=0) %}
       {% for assignment in grouped[section] %}
         {% set subs = student_submissions
              | selectattr("assignment_id","equalto", assignment.id)
@@ -119,12 +123,26 @@
         {% else %}
           {% set status = "status-notattempted" %}
         {% endif %}
+        {% if assignment.required %}
+          {% set sec.req = sec.req + 1 %}
+          {% if passed_no_help|length > 0 or passed_with_help|length > 0 %}{% set sec.req_done = sec.req_done + 1 %}{% endif %}
+        {% endif %}
         {% set sec.items = sec.items + [{'a': assignment, 'status': status, 'required': assignment.required}] %}
       {% endfor %}
       {% set total = sec.items|length %}
-      <details class="box">
+      {% set all_req_done = sec.req > 0 and sec.req == sec.req_done %}
+      <details class="box{% if all_req_done %} box-done{% endif %}"{% if loop.first %} open{% endif %}>
         <summary>
           {{ section }}
+          {% if all_req_done %}<span class="done-badge" title="Všechna povinná cvičení splněna">✓ povinné splněno</span>
+          {% elif sec.req > 0 %}
+            {% set req_pct = sec.req_done * 100 / sec.req %}
+            {% if req_pct >= 75 %}{% set req_label = "skoro hotovo" %}
+            {% elif req_pct >= 50 %}{% set req_label = "už nejsem jantar" %}
+            {% elif req_pct >= 25 %}{% set req_label = "lepší než drátem do oka" %}
+            {% else %}{% set req_label = "kde nic není..." %}{% endif %}
+            {% if req_label %}<span class="progress-badge" title="Splněno povinných: {{ sec.req_done }} / {{ sec.req }}">{{ req_label }}</span>{% endif %}
+          {% endif %}
           <span class="meta">{{ sec.done }} / {{ total }}</span>
           <span class="progress progress-mini"><span class="progress-bar bg-success" style="width: {{ (sec.done * 100 / total)|round|int if total else 0 }}%"></span></span>
         </summary>
