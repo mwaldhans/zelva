@@ -385,6 +385,23 @@ select:focus {
     color: #a33a2b;
 }
 
+.ai-review {
+    margin: 0.65rem 0 0;
+    background: #f8fbe9;
+    border-left: 3px solid #bccc34;
+    border-radius: 0 8px 8px 0;
+    padding: 0.5rem 0.75rem;
+    color: #42510f;
+    font-size: 0.93rem;
+    white-space: pre-wrap;
+}
+
+.ai-review.error {
+    background: #fdf1ef;
+    border-left-color: #a33a2b;
+    color: #a33a2b;
+}
+
 button {
     border: none;
     border-radius: 10px;

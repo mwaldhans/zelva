@@ -8,6 +8,7 @@ const stepBtn = document.getElementById("stepBtn");
 const stepBackBtn = document.getElementById("stepBackBtn");
 const clearBtn = document.getElementById("clearBtn");
 const stopBtn = document.getElementById("stopBtn");
+const aiReviewEl = document.getElementById("aiReview");
 const patternListEl = document.getElementById("patternList");
 const patternHint = document.getElementById("patternHint");
 const hintToggleBtn = document.getElementById("hintToggleBtn");
@@ -839,9 +840,7 @@ async function stepExecution(direction = 1) {
             const evaluation = evaluateDrawing();
             setResult(evaluation);
             logEl.textContent = `Hotovo. ${evaluation.reason}`;
-            if (!IS_ADMIN_PREVIEW && !IS_SANDBOX) {
-                await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
-            }
+            await saveAndReview(evaluation);
             renderPatternMenu();
             return { status: "done", total_steps: preparedStepProgram.length };
         }
@@ -2462,6 +2461,9 @@ function loadPattern(patternId) {
         hintToggleBtn.hidden = true;
     }
     expectedSegments = buildExpectedSegments(pattern);
+    if (aiReviewEl) {
+        aiReviewEl.hidden = true;
+    }
     resetCanvas();
     renderPatternMenu();
     updateFooterStats();
@@ -2529,9 +2531,7 @@ async function runCommands() {
     const evaluation = evaluateDrawing();
     setResult(evaluation);
     logEl.textContent = `Hotovo. ${evaluation.reason}`;
-    if (!IS_ADMIN_PREVIEW && !IS_SANDBOX) {
-        await saveProgress(selectedPatternId, commandsEl.value, evaluation.isMatch, evaluation.score);
-    }
+    await saveAndReview(evaluation);
     renderPatternMenu();
 
     isRunning = false;
@@ -2549,6 +2549,63 @@ async function runSingleStep() {
     }
 
     logEl.textContent = `Krok ${stepResult.step_index}/${stepResult.total_steps}`;
+}
+
+let aiReviewRequestId = 0;
+
+async function requestAiReview(patternId, code, percent) {
+    if (!aiReviewEl) {
+        return;
+    }
+    const pattern = PATTERNS.find((x) => x.id === patternId);
+    const requestId = ++aiReviewRequestId;
+    const isCurrent = () => requestId === aiReviewRequestId && selectedPatternId === patternId;
+
+    aiReviewEl.hidden = false;
+    aiReviewEl.className = "ai-review";
+    aiReviewEl.textContent = "AI hodnotí váš kód...";
+    try {
+        const response = await fetch("/api/ai-review", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                code,
+                pattern_name: pattern ? getLearnerPatternName(pattern) : "",
+                is_match: true,
+                match_percent: percent,
+            }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!isCurrent()) {
+            return;
+        }
+        if (!response.ok) {
+            aiReviewEl.textContent = data.error || "AI hodnocení se nepodařilo.";
+            aiReviewEl.classList.add("error");
+            return;
+        }
+        aiReviewEl.textContent = data.review;
+    } catch (_) {
+        if (isCurrent()) {
+            aiReviewEl.textContent = "AI hodnocení se nepodařilo, zkontrolujte připojení.";
+            aiReviewEl.classList.add("error");
+        }
+    }
+}
+
+async function saveAndReview(evaluation) {
+    if (IS_ADMIN_PREVIEW || IS_SANDBOX) {
+        return;
+    }
+    const patternId = selectedPatternId;
+    const code = commandsEl.value;
+    await saveProgress(patternId, code, evaluation.isMatch, evaluation.score);
+    if (evaluation.isMatch && code.trim()) {
+        requestAiReview(patternId, code, Math.round(evaluation.score * 100));
+    } else if (aiReviewEl) {
+        aiReviewRequestId += 1;
+        aiReviewEl.hidden = true;
+    }
 }
 
 drawBtn.addEventListener("click", runCommands);

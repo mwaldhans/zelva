@@ -12,7 +12,7 @@ from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
 from flask import Flask, current_app, g, jsonify, redirect, render_template, request, session, url_for
 
-from . import python_course
+from . import ai_review, python_course
 
 
 LOGIN_DOMAIN = "gymnzidlo.cz"
@@ -617,6 +617,9 @@ def create_app(test_config: dict | None = None) -> Flask:
     app.config.from_mapping(
         SECRET_KEY=os.getenv("SECRET_KEY", "dev-only-change-me"),
         ADMIN_EMAIL=os.getenv("ADMIN_EMAIL", DEFAULT_ADMIN_EMAIL),
+        AI_API_KEY=os.getenv("AI_API_KEY", ""),
+        AI_API_URL=os.getenv("AI_API_URL", ""),
+        AI_MODEL=os.getenv("AI_MODEL", ""),
     )
     if test_config:
         app.config.update(test_config)
@@ -908,6 +911,31 @@ def create_app(test_config: dict | None = None) -> Flask:
                 "time_seconds": time_seconds,
             }
         ), 200
+
+    @app.post("/api/ai-review")
+    def ai_code_review() -> tuple[dict[str, object], int]:
+        payload = request.get_json(silent=True) or {}
+        code = str(payload.get("code", "")).strip()
+        if not code:
+            return jsonify({"error": "Nejdřív napište nějaký kód."}), 400
+        if len(code) > ai_review.MAX_CODE_LENGTH:
+            return jsonify({"error": "Kód je příliš dlouhý pro AI hodnocení."}), 400
+
+        is_match = payload.get("is_match")
+        match_percent = payload.get("match_percent")
+        try:
+            review = ai_review.request_review(
+                api_key=app.config.get("AI_API_KEY") or "",
+                api_url=app.config.get("AI_API_URL") or ai_review.DEFAULT_API_URL,
+                model=app.config.get("AI_MODEL") or ai_review.DEFAULT_MODEL,
+                pattern_name=str(payload.get("pattern_name", ""))[:120],
+                code=code,
+                is_match=is_match if isinstance(is_match, bool) else None,
+                match_percent=int(match_percent) if isinstance(match_percent, (int, float)) else None,
+            )
+        except ai_review.AiReviewError as error:
+            return jsonify({"error": str(error)}), error.status
+        return jsonify({"review": review}), 200
 
     @app.get("/api/admin/progress")
     @_admin_required

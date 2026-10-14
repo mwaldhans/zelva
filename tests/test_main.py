@@ -1,5 +1,7 @@
 from pathlib import Path
+import json
 import sqlite3
+import urllib.error
 
 from zelva.app import _is_allowed_login_email, create_app
 
@@ -215,6 +217,83 @@ def test_student_assignment_prefills_latest_submission(tmp_path: Path) -> None:
         '                  class="form-control border-0 p-0">def solve():\n'
         "    return 3</textarea>"
     ) in html
+
+
+def test_ai_review_requires_configuration(tmp_path: Path) -> None:
+    app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "test.db"), "AI_API_KEY": ""})
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"sub": "student-1", "email": "student@gymnzidlo.cz"}
+
+    empty = client.post("/api/ai-review", json={"code": "  "})
+    assert empty.status_code == 400
+
+    too_long = client.post("/api/ai-review", json={"code": "forward(1)\n" * 1000})
+    assert too_long.status_code == 400
+
+    unconfigured = client.post("/api/ai-review", json={"code": "forward(100)"})
+    assert unconfigured.status_code == 503
+
+
+def test_ai_review_returns_model_feedback(tmp_path: Path, monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps({"choices": [{"message": {"content": " Pěkné řešení. "}}]}).encode("utf-8")
+
+    def fake_urlopen(http_request, timeout):
+        captured["url"] = http_request.full_url
+        captured["auth"] = http_request.get_header("Authorization")
+        captured["body"] = json.loads(http_request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr("zelva.ai_review.urllib.request.urlopen", fake_urlopen)
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "test.db"),
+        "AI_API_KEY": "secret",
+        "AI_API_URL": "https://ai.example/v1/chat/completions",
+        "AI_MODEL": "test-model",
+    })
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"sub": "student-1", "email": "student@gymnzidlo.cz"}
+
+    response = client.post(
+        "/api/ai-review",
+        json={"code": "forward(100)", "pattern_name": "Čtverec", "is_match": False, "match_percent": 40},
+    )
+
+    assert response.status_code == 200
+    assert response.json == {"review": "Pěkné řešení."}
+    assert captured["url"] == "https://ai.example/v1/chat/completions"
+    assert captured["auth"] == "Bearer secret"
+    assert captured["body"]["model"] == "test-model"
+    assert "forward(100)" in captured["body"]["messages"][1]["content"]
+    assert "40 % shoda" in captured["body"]["messages"][1]["content"]
+
+
+def test_ai_review_handles_unreachable_service(tmp_path: Path, monkeypatch) -> None:
+    def failing_urlopen(http_request, timeout):
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr("zelva.ai_review.urllib.request.urlopen", failing_urlopen)
+    app = create_app({"TESTING": True, "DATABASE": str(tmp_path / "test.db"), "AI_API_KEY": "secret"})
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {"sub": "student-1", "email": "student@gymnzidlo.cz"}
+
+    response = client.post("/api/ai-review", json={"code": "forward(100)"})
+
+    assert response.status_code == 502
+    assert "error" in response.json
 
 
 def test_admin_patterns_persist_in_sqlite(tmp_path: Path) -> None:

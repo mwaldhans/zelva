@@ -57,6 +57,18 @@ export PORT=5000
 export DEBUG=1
 ```
 
+## AI hodnoceni kodu
+
+V ulohach zelvy se po ulozeni **spravneho** reseni automaticky zobrazi AI hodnoceni kodu: model posle strucnou zpetnou vazbu v cestine (bez hotoveho reseni). Pouziva se libovolne API kompatibilni s OpenAI (`/v1/chat/completions`). Nastavte promenne:
+
+```text
+AI_API_KEY=<klic k API>
+AI_API_URL=https://api.openai.com/v1/chat/completions   # volitelne
+AI_MODEL=gpt-4o-mini                                    # volitelne
+```
+
+Bez `AI_API_KEY` se misto hodnoceni zobrazi hlaska, ze neni nakonfigurovane. Kod je omezen na 4000 znaku.
+
 ## Produkcni beh na Linux serveru
 
 Bez EXE, pres standardni WSGI server `gunicorn`:
