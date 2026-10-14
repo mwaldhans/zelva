@@ -6,110 +6,142 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
     <style>
-        .status-success       { background-color: #d4edda; }
-        .status-success-help  { background-color: #add8e6; }
-        .status-failure       { background-color: #f8d7da; }
-        .status-notattempted  { background-color: #e2e3e5; }
-        .assignment-card      { margin-bottom: 15px; }
+        body { font-size: .9rem; }
+        body.python-course, .python-course .text-muted, .python-course a:not(.btn), .python-course details.box > summary, details.box > summary .meta, .python-course table, .python-course .chip { color: #000 !important; }
+        .python-course .chip .req { color: #555 !important; }
+        .status-success       { background-color: #d4edda; border-color: #b7dfc1; }
+        .status-success-help  { background-color: #add8e6; border-color: #8fc6d9; }
+        .status-failure       { background-color: #f8d7da; border-color: #efb9bf; }
+        .status-notattempted  { background-color: #e2e3e5; border-color: #cfd1d4; }
+        details.box { background: #fff; border: 1px solid #dee2e6; border-radius: .25rem; margin-bottom: .4rem; }
+        details.box > summary { cursor: pointer; padding: .35rem .7rem; font-weight: 600; list-style: none; display: flex; align-items: center; }
+        details.box > summary::-webkit-details-marker { display: none; }
+        details.box > summary::before { content: "▸"; display: inline-block; width: 1.1em; transition: transform .15s; }
+        details.box[open] > summary::before { transform: rotate(90deg); }
+        details.box > summary .meta { margin-left: auto; font-weight: 400; font-size: .8rem; color: #6c757d; }
+        .box-body { padding: .3rem .7rem .6rem; }
+        .chips { display: grid; grid-template-columns: repeat(4, 1fr); gap: .75rem; padding-top: .75rem; }
+        .chip { position: relative; display: flex; align-items: center; justify-content: flex-start; text-align: left; min-height: 84px; padding: .8rem 2.2rem .8rem 1rem; border: 1px solid rgba(0,0,0,.08); border-left: 6px solid; border-radius: .75rem; color: #000; text-decoration: none; font-family: "Trebuchet MS", "Segoe UI", Verdana, sans-serif; font-size: 1.1rem; font-weight: 700; line-height: 1.25; word-break: break-word; box-shadow: 0 1px 3px rgba(0,0,0,.08); transition: transform .12s, box-shadow .12s; }
+        .chip::after { position: absolute; top: .55rem; right: .7rem; font-size: 1.05rem; font-weight: 700; }
+        .chip.is-required { padding-bottom: 1.9rem; }
+        .chip .req { position: absolute; bottom: .45rem; right: .8rem; font-size: .7rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #555; }
+        .chip:hover { text-decoration: none; color: #000; transform: translateY(-2px); box-shadow: 0 6px 14px rgba(0,0,0,.14); }
+        .chip.status-success       { background: #e8f6ec; border-left-color: #2e9d4f; }
+        .chip.status-success::after{ content: "✓"; color: #2e9d4f; }
+        .chip.status-success-help  { background: #e6f3fa; border-left-color: #2c8fc4; }
+        .chip.status-success-help::after { content: "✓"; color: #2c8fc4; }
+        .chip.status-failure       { background: #fdecee; border-left-color: #d9534f; }
+        .chip.status-failure::after{ content: "✗"; color: #d9534f; }
+        .chip.status-notattempted  { background: #f4f5f6; border-left-color: #b8bcc1; }
+        @media (max-width: 992px) { .chips { grid-template-columns: repeat(2, 1fr); } }
+        @media (max-width: 480px) { .chips { grid-template-columns: 1fr; } }
+        .progress-mini { width: 70px; height: 6px; margin-left: .6rem; }
+        table.compact td, table.compact th { padding: .2rem .5rem; }
     </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
 </head>
 <body class="bg-light python-course">
 {% include "python/_header.html" %}
-<div class="container mt-4">
-    <h2>Tvůj dashboard</h2>
-    <p>Přihlášený jako: <strong>{{ session['username'] }}</strong></p>
-    {% if session.get('role') == 'teacher' %}
-        <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-warning mb-3">Učitelský dashboard</a>
-    {% endif %}
+<div class="container mt-3">
+    <div class="d-flex flex-wrap align-items-center mb-2">
+        <h4 class="mb-0 mr-3">Tvůj dashboard</h4>
+        <span class="text-muted">{{ session['username'] }}</span>
+        {% if session.get('role') == 'teacher' %}
+            <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-sm btn-warning ml-3">Učitelský dashboard</a>
+        {% endif %}
+        <span class="ml-auto">
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(true)">Rozbalit vše</button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAll(false)">Sbalit vše</button>
+        </span>
+    </div>
 
     {# Přiřazené úkoly #}
     {% if assigned %}
-      <h3 class="mt-4">Přiřazené úkoly</h3>
-      <table class="table table-bordered">
-        <thead class="thead-dark">
-          <tr>
-            <th>Cvičení</th>
-            <th>Sekce</th>
-            <th>Deadline</th>
-            <th>Status</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for a in assigned %}
-            {# zjistíme, zda už student úkol úspěšně dokončil #}
-            {% set attempts = student_submissions
-                 | selectattr("assignment_id","equalto", a.assignment_id)
-                 | list %}
-            {% set passed = attempts
-                 | selectattr("result","search","Test prošel!")
-                 | list %}
-            {% set completed = passed|length > 0 %}
-            {# pokud je po deadlinu a zároveň dokončený, nefiltrujeme #}
-            {% if not (completed and a.overdue) %}
-              <tr class="{% if completed %}table-success{% elif a.overdue %}table-danger{% else %}table-warning{% endif %}">
-                <td>
-                  <a href="{{ url_for('python.student_assignment', assignment_id=a.assignment_id) }}">
-                    {{ a.title }}
-                  </a>
-                </td>
-                <td>{{ a.section }}</td>
-                <td>{{ a.deadline | format_datetime }}</td>
-                <td>
-                  {% if completed %}
-                    Splněno
-                  {% elif a.overdue %}
-                    Nesplněno (po termínu)
-                  {% else %}
-                    Nesplněno
-                  {% endif %}
-                </td>
-              </tr>
-            {% endif %}
-          {% endfor %}
-        </tbody>
-      </table>
+      {% set ns = namespace(rows=[]) %}
+      {% for a in assigned %}
+        {% set passed = student_submissions
+             | selectattr("assignment_id","equalto", a.assignment_id)
+             | selectattr("result","search","Test prošel!")
+             | list %}
+        {% set completed = passed|length > 0 %}
+        {% if not (completed and a.overdue) %}
+          {% set ns.rows = ns.rows + [{'a': a, 'completed': completed}] %}
+        {% endif %}
+      {% endfor %}
+      {% if ns.rows %}
+      <details class="box" open>
+        <summary>Přiřazené úkoly <span class="meta">{{ ns.rows|length }}</span></summary>
+        <div class="box-body">
+          <table class="table table-sm table-bordered compact mb-0">
+            <thead class="thead-light">
+              <tr><th>Cvičení</th><th>Sekce</th><th>Deadline</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              {% for r in ns.rows %}
+                {% set a = r.a %}
+                <tr class="{% if r.completed %}table-success{% elif a.overdue %}table-danger{% else %}table-warning{% endif %}">
+                  <td><a href="{{ url_for('python.student_assignment', assignment_id=a.assignment_id) }}">{{ a.title }}</a></td>
+                  <td>{{ a.section }}</td>
+                  <td>{{ a.deadline | format_datetime }}</td>
+                  <td>{% if r.completed %}Splněno{% elif a.overdue %}Po termínu{% else %}Nesplněno{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </details>
+      {% endif %}
     {% endif %}
 
     {# Cvičení podle sekcí #}
     {% for section in ordered_sections %}
-        <h3 class="mt-4">{{ section }}</h3>
-        <div class="row">
-          {% for assignment in grouped[section] %}
-            {% set subs = student_submissions
-                 | selectattr("assignment_id","equalto", assignment.id)
-                 | list %}
-            {% set passed_no_help = subs
-                 | selectattr("result","search","Test prošel!")
-                 | selectattr("help_used","equalto", 0)
-                 | list %}
-            {% set passed_with_help = subs
-                 | selectattr("result","search","Test prošel!")
-                 | selectattr("help_used","equalto", 1)
-                 | list %}
-            {% if passed_no_help|length > 0 %}
-              {% set status = "status-success" %}
-            {% elif passed_with_help|length > 0 %}
-              {% set status = "status-success-help" %}
-            {% elif subs|length > 0 %}
-              {% set status = "status-failure" %}
-            {% else %}
-              {% set status = "status-notattempted" %}
-            {% endif %}
-            <div class="col-md-4">
-              <div class="card assignment-card {{ status }}">
-                <div class="card-body">
-                  <h5 class="card-title">{{ assignment.title }}</h5>
-                  <a href="{{ url_for('python.student_assignment', assignment_id=assignment.id) }}"
-                     class="btn btn-primary">Vyřešit úkol</a>
-                </div>
-              </div>
-            </div>
+      {% set sec = namespace(done=0, items=[]) %}
+      {% for assignment in grouped[section] %}
+        {% set subs = student_submissions
+             | selectattr("assignment_id","equalto", assignment.id)
+             | list %}
+        {% set passed_no_help = subs
+             | selectattr("result","search","Test prošel!")
+             | selectattr("help_used","equalto", 0)
+             | list %}
+        {% set passed_with_help = subs
+             | selectattr("result","search","Test prošel!")
+             | selectattr("help_used","equalto", 1)
+             | list %}
+        {% if passed_no_help|length > 0 %}
+          {% set status = "status-success" %}
+          {% set sec.done = sec.done + 1 %}
+        {% elif passed_with_help|length > 0 %}
+          {% set status = "status-success-help" %}
+          {% set sec.done = sec.done + 1 %}
+        {% elif subs|length > 0 %}
+          {% set status = "status-failure" %}
+        {% else %}
+          {% set status = "status-notattempted" %}
+        {% endif %}
+        {% set sec.items = sec.items + [{'a': assignment, 'status': status, 'required': assignment.required}] %}
+      {% endfor %}
+      {% set total = sec.items|length %}
+      <details class="box">
+        <summary>
+          {{ section }}
+          <span class="meta">{{ sec.done }} / {{ total }}</span>
+          <span class="progress progress-mini"><span class="progress-bar bg-success" style="width: {{ (sec.done * 100 / total)|round|int if total else 0 }}%"></span></span>
+        </summary>
+        <div class="box-body chips">
+          {% for it in sec.items %}
+            <a class="chip {{ it.status }}{% if it.required %} is-required{% endif %}" href="{{ url_for('python.student_assignment', assignment_id=it.a.id) }}">{{ it.a.title }}{% if it.required %}<span class="req" title="Povinné cvičení">Povinné</span>{% endif %}</a>
           {% endfor %}
         </div>
+      </details>
     {% endfor %}
 </div>
 
+<script>
+function toggleAll(open) {
+    document.querySelectorAll('details.box').forEach(function (d) { d.open = open; });
+}
+</script>
 <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>

@@ -3,80 +3,86 @@
 <html lang="cs">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Odevzdání studentů</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
     <style>
+      body { font-size: .85rem; }
       .success       { background-color: #d4edda; }
       .success-blue  { background-color: #add8e6; }
       .failure       { background-color: #f8d7da; }
-      select { min-width: 30px; }
+      .filters { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: flex-end; }
+      .filters label { margin: 0; font-size: .75rem; font-weight: 600; display: block; }
+      .filters select { min-width: 140px; font-size: .8rem; }
+      table.compact th, table.compact td { padding: .2rem .4rem; vertical-align: top; }
+      table.compact thead th { position: sticky; top: 0; z-index: 1; }
+      table.compact pre { margin: 0; max-height: 4.2em; max-width: 380px; overflow: auto; font-size: .75rem; white-space: pre; }
+      table.compact pre:hover { max-height: 30em; }
+      .nowrap { white-space: nowrap; }
+      .res { max-width: 260px; max-height: 4.2em; overflow: auto; }
     </style>
     <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
 </head>
 <body class="bg-light python-course">
 {% include "python/_header.html" %}
-<div class="container mt-4">
-    <h2>Odevzdání studentů</h2>
-    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mb-3">Zpět na dashboard</a>
-    <!-- Filtrační formulář s multi-select – select boxy se zobrazují v samostatném bloku -->
-    <form method="get" class="form-inline mb-3">
-        <div class="form-group">
-            <label for="class_id" class="mr-2">Třída:</label>
-            <select name="class_id" id="class_id" class="form-control" multiple>
+<div class="container-fluid mt-2 px-3">
+    <div class="d-flex align-items-center mb-2">
+        <h4 class="mb-0 mr-3">Odevzdání studentů</h4>
+        <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-sm btn-secondary">Zpět na dashboard</a>
+        <span class="ml-auto text-muted">Počet: {{ submissions|length }}</span>
+    </div>
+    <form method="get" class="filters mb-2">
+        <div>
+            <label for="class_id">Třída</label>
+            <select name="class_id" id="class_id" class="form-control form-control-sm" multiple size="4">
                 {% for cl in classes %}
-                    <option value="{{ cl.id }}" {% if cl.id|string in selected_class_ids %}selected{% endif %}>
-                        {{ cl.name }}
-                    </option>
+                    <option value="{{ cl.id }}" {% if cl.id|string in selected_class_ids %}selected{% endif %}>{{ cl.name }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="form-group">
-            <label for="student_email" class="mr-2">Student:</label>
-            <select name="student_email" id="student_email" class="form-control" multiple>
+        <div>
+            <label for="student_email">Student</label>
+            <select name="student_email" id="student_email" class="form-control form-control-sm" multiple size="4">
                 {% for s in all_students %}
-                    <option value="{{ s.email }}" {% if s.email in selected_student_emails %}selected{% endif %}>
-                        {{ s.email }}
-                    </option>
+                    <option value="{{ s.email }}" {% if s.email in selected_student_emails %}selected{% endif %}>{{ s.email }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="form-group">
-            <label for="section" class="mr-2">Sekce:</label>
-            <select name="section" id="section" class="form-control" multiple>
+        <div>
+            <label for="section">Sekce</label>
+            <select name="section" id="section" class="form-control form-control-sm" multiple size="4">
                 {% for sec in sections %}
-                    <option value="{{ sec.section }}" {% if sec.section in selected_sections %}selected{% endif %}>
-                        {{ sec.section }}
-                    </option>
+                    <option value="{{ sec.section }}" {% if sec.section in selected_sections %}selected{% endif %}>{{ sec.section }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="form-group">
-            <label for="assignment_id" class="mr-2">Cvičení:</label>
-            <select name="assignment_id" id="assignment_id" class="form-control" multiple>
+        <div>
+            <label for="assignment_id">Cvičení</label>
+            <select name="assignment_id" id="assignment_id" class="form-control form-control-sm" multiple size="4">
                 {% for a in all_assignments %}
-                    <option value="{{ a.id }}" {% if a.id|string in selected_assignment_ids %}selected{% endif %}>
-                        {{ a.title }}
-                    </option>
+                    <option value="{{ a.id }}" {% if a.id|string in selected_assignment_ids %}selected{% endif %}>{{ a.title }}</option>
                 {% endfor %}
             </select>
         </div>
-        <!-- Tlačítka pod výběry -->
-        <p>
-        <br>
-        <button type="submit" class="btn btn-primary mb-3">Filtrovat</button>
-        <a href="{{ url_for('python.teacher_submissions') }}" class="btn btn-warning ml-2 mb-3">Zrušit všechny filtry</a>
-        </p>
+        <div class="custom-control custom-checkbox mb-1">
+            <input type="checkbox" class="custom-control-input" id="last_only" name="last_only" value="1" {% if last_only %}checked{% endif %}>
+            <label class="custom-control-label" for="last_only" style="font-weight:600">Jen poslední odevzdání každého úkolu a studenta</label>
+        </div>
+        <div>
+            <button type="submit" class="btn btn-sm btn-primary">Filtrovat</button>
+            <a href="{{ url_for('python.teacher_submissions') }}" class="btn btn-sm btn-warning ml-1">Zrušit filtry</a>
+        </div>
     </form>
-    
-    <table class="table table-bordered">
+
+    <table class="table table-bordered table-sm compact mb-2">
         <thead class="thead-dark">
             <tr>
                 <th>Student</th>
                 <th>Cvičení</th>
                 <th>Kód</th>
                 <th>Výsledek</th>
-                <th>Čas řešení</th>
-                <th>Čas</th>
+                <th class="nowrap">Doba</th>
+                <th class="nowrap">Čas</th>
             </tr>
         </thead>
         <tbody>
@@ -92,22 +98,15 @@
                 {% endif %}
                 <tr class="{{ row_class }}">
                     <td>{{ sub.student_email }}</td>
-                    <td>{{ sub.assignment_title }} ({{ sub.assignment_section }})</td>
+                    <td>{{ sub.assignment_title }} <small class="text-muted">({{ sub.assignment_section }})</small></td>
                     <td><pre>{{ sub.student_code }}</pre></td>
-                    <td>{{ sub.result|safe }}</td>
-                    <td>
-                      {% if sub.time_taken is defined %}
-                        {{ sub.time_taken }} s
-                      {% else %}
-                        —
-                      {% endif %}
-                    </td>
-                    <td>{{ sub.submission_time | localize_time }}</td>
+                    <td><div class="res">{{ sub.result|safe }}</div></td>
+                    <td class="nowrap">{% if sub.time_taken is defined %}{{ sub.time_taken }} s{% else %}—{% endif %}</td>
+                    <td class="nowrap">{{ sub.submission_time | localize_time }}</td>
                 </tr>
             {% endfor %}
         </tbody>
     </table>
-    <a href="{{ url_for('python.teacher_dashboard') }}" class="btn btn-secondary mt-3">Zpět na dashboard</a>
 </div>
 </body>
 </html>

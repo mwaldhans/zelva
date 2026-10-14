@@ -149,6 +149,18 @@ def init_db(database_path):
         pass
     try:
         conn.execute(
+            "ALTER TABLE assignments ADD COLUMN active INTEGER NOT NULL DEFAULT 1"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
+            "ALTER TABLE assignments ADD COLUMN required INTEGER NOT NULL DEFAULT 0"
+        )
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute(
             "ALTER TABLE submissions ADD COLUMN time_taken INTEGER NOT NULL DEFAULT 0"
         )
     except sqlite3.OperationalError:
@@ -291,6 +303,23 @@ def teacher_dashboard():
     conn.close()
     grouped = group_assignments(assignments)
     return render_template("python/teacher_dashboard.html", grouped=grouped)
+
+
+@bp.route("/teacher/set_active", methods=["POST"])
+@teacher_required
+def teacher_set_active():
+    active_ids = {int(i) for i in request.form.getlist("active") if i.isdigit()}
+    required_ids = {int(i) for i in request.form.getlist("required") if i.isdigit()}
+    conn = get_db_connection()
+    ids = [r["id"] for r in conn.execute("SELECT id FROM assignments").fetchall()]
+    conn.executemany(
+        "UPDATE assignments SET active = ?, required = ? WHERE id = ?",
+        [(1 if i in active_ids else 0, 1 if i in required_ids else 0, i) for i in ids],
+    )
+    conn.commit()
+    conn.close()
+    flash("Aktivní a povinná cvičení byla uložena.")
+    return redirect(url_for("python.teacher_dashboard"))
 
 
 @bp.route("/teacher/wall", methods=["GET", "POST"])
@@ -704,6 +733,9 @@ def student_assignment(assignment_id):
     if not row:
         conn.close()
         return "Úkol nenalezen.", 404
+    if not row["active"] and session.get("role") != "teacher":
+        conn.close()
+        return "Úkol není pro studenty aktivní.", 404
     assignment = dict(row)
 
     teacher_code      = assignment.get("teacher_code", "")
@@ -935,24 +967,20 @@ def teacher_statistics():
     assignment_query += " ORDER BY COALESCE(section_order, 0), COALESCE(display_order, 0), section, title"
     assignments = conn.execute(assignment_query, tuple(assignment_params)).fetchall()
     
-    # Načtení studentů – podle filtrů tříd nebo emailů, pokud jsou zadány, jinak všechny
-    student_query = "SELECT * FROM students"
-    student_conditions = []
-    student_params = []
+    # Jen studenti, kteří skutečně něco odevzdali
+    all_students = [
+        {"email": r["email"], "name": r["name"] or r["email"], "class_id": r["class_id"]}
+        for r in conn.execute(
+            "SELECT sub.email AS email, st.name AS name, st.class_id AS class_id FROM "
+            "(SELECT DISTINCT student_email AS email FROM submissions) sub "
+            "LEFT JOIN students st ON st.email = sub.email ORDER BY sub.email"
+        ).fetchall()
+    ]
     if selected_class_ids:
-        placeholders = ",".join("?" for _ in selected_class_ids)
-        student_conditions.append("class_id IN (" + placeholders + ")")
-        student_params.extend(selected_class_ids)
+        all_students = [s for s in all_students if str(s["class_id"]) in selected_class_ids]
+    students = all_students
     if selected_student_emails:
-        placeholders = ",".join("?" for _ in selected_student_emails)
-        student_conditions.append("email IN (" + placeholders + ")")
-        student_params.extend(selected_student_emails)
-    if student_conditions:
-        student_query += " WHERE " + " AND ".join(student_conditions)
-    student_query += " ORDER BY email"
-    students = conn.execute(student_query, tuple(student_params)).fetchall()
-    if not selected_class_ids and not selected_student_emails:
-        students = conn.execute("SELECT * FROM students ORDER BY email").fetchall()
+        students = [s for s in students if s["email"] in selected_student_emails]
     
     # Sestavení statistik pro každé assignment a studenta
     stats = {}
@@ -1062,6 +1090,7 @@ def teacher_statistics():
     return render_template("python/teacher_statistics.html",
         assignments=assignments,
         students=students,
+        all_students=all_students,
         stats=stats,
         assignment_stats=assignment_stats,
         classes=classes,
@@ -1086,6 +1115,7 @@ def teacher_submissions():
     selected_student_emails = request.args.getlist("student_email")
     selected_sections = request.args.getlist("section")
     selected_assignment_ids = request.args.getlist("assignment_id")
+    last_only = request.args.get("last_only") == "1"
     
     # Sestavení dotazu na odevzdání
     query = (
@@ -1113,13 +1143,26 @@ def teacher_submissions():
         params.extend(selected_assignment_ids)
     if conditions:
         query += " WHERE " + " AND ".join(conditions)
-    query += " ORDER BY s.submission_time DESC"
+    query += " ORDER BY s.submission_time DESC, s.id DESC"
     submissions = conn.execute(query, tuple(params)).fetchall()
+    if last_only:
+        seen = set()
+        latest = []
+        for sub in submissions:
+            key = (sub["student_email"], sub["assignment_id"])
+            if key not in seen:
+                seen.add(key)
+                latest.append(sub)
+        submissions = latest
     
     # Pro nabídku filtrů načteme všechna data z tabulek
     classes = conn.execute("SELECT * FROM classes ORDER BY name").fetchall()
-    # Všechny studenty
-    all_students = conn.execute("SELECT * FROM students ORDER BY email").fetchall()
+    # Jen studenti, kteří skutečně něco odevzdali
+    all_students = conn.execute(
+        "SELECT sub.email AS email, st.name AS name, st.class_id AS class_id FROM "
+        "(SELECT DISTINCT student_email AS email FROM submissions) sub "
+        "LEFT JOIN students st ON st.email = sub.email ORDER BY sub.email"
+    ).fetchall()
     # Pokud byl vybrán filtr pro třídu, omezíme nabídku studentů
     if selected_class_ids:
         all_students = [s for s in all_students if str(s["class_id"]) in selected_class_ids]
@@ -1141,7 +1184,8 @@ def teacher_submissions():
                            selected_class_ids=selected_class_ids,
                            selected_student_emails=selected_student_emails,
                            selected_sections=selected_sections,
-                           selected_assignment_ids=selected_assignment_ids)
+                           selected_assignment_ids=selected_assignment_ids,
+                           last_only=last_only)
 
 # ROUTA PRO ŘAZENÍ SEKCIÍ
 @bp.route("/teacher/order_sections", methods=["GET", "POST"])
@@ -1202,7 +1246,7 @@ def student_dashboard():
               ca.deadline   AS deadline
             FROM class_assignments ca
             JOIN assignments a ON ca.assignment_id = a.id
-            WHERE ca.class_id = ?
+            WHERE ca.class_id = ? AND a.active = 1
             ORDER BY ca.deadline
         """, (student["class_id"],)).fetchall()
         for r in rows:
@@ -1230,7 +1274,8 @@ def student_dashboard():
         (session["username"],)
     ).fetchall()
     assignments = conn.execute(
-        "SELECT * FROM assignments ORDER BY COALESCE(section_order,0), COALESCE(display_order,0), title"
+        "SELECT * FROM assignments WHERE active = 1 "
+        "ORDER BY COALESCE(section_order,0), COALESCE(display_order,0), title"
     ).fetchall()
     conn.close()
 
