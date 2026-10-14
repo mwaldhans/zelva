@@ -73,7 +73,7 @@
         {% endif %}
       {% endfor %}
       {% if ns.rows %}
-      <details class="box" open>
+      <details class="box" data-key="__assigned" open>
         <summary>Přiřazené úkoly <span class="meta">{{ ns.rows|length }}</span></summary>
         <div class="box-body">
           <table class="table table-sm table-bordered compact mb-0">
@@ -131,7 +131,7 @@
       {% endfor %}
       {% set total = sec.items|length %}
       {% set all_req_done = sec.req > 0 and sec.req == sec.req_done %}
-      <details class="box{% if all_req_done %} box-done{% endif %}"{% if loop.first %} open{% endif %}>
+      <details class="box{% if all_req_done %} box-done{% endif %}" data-key="{{ section }}"{% if loop.first %} open{% endif %}>
         <summary>
           {{ section }}
           {% if all_req_done %}<span class="done-badge" title="Všechna povinná cvičení splněna">✓ povinné splněno</span>
@@ -156,9 +156,26 @@
 </div>
 
 <script>
+var STORE_KEY = "dashboard-open:" + {{ session["username"]|tojson }};
+function readState() {
+    try { return JSON.parse(localStorage.getItem(STORE_KEY)) || {}; } catch (e) { return {}; }
+}
+function saveState() {
+    var state = {};
+    document.querySelectorAll('details.box').forEach(function (d) { state[d.dataset.key] = d.open; });
+    try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+}
 function toggleAll(open) {
     document.querySelectorAll('details.box').forEach(function (d) { d.open = open; });
+    saveState();
 }
+(function () {
+    var state = readState();
+    document.querySelectorAll('details.box').forEach(function (d) {
+        if (d.dataset.key in state) { d.open = state[d.dataset.key]; }
+        d.addEventListener('toggle', saveState);
+    });
+})();
 </script>
 <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.0/dist/js/bootstrap.bundle.min.js"></script>
