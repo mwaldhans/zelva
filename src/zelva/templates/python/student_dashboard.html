@@ -143,6 +143,7 @@
             {% else %}{% set req_label = "kde nic není..." %}{% endif %}
             {% if req_label %}<span class="progress-badge" title="Splněno povinných: {{ sec.req_done }} / {{ sec.req }}">{{ req_label }}</span>{% endif %}
           {% endif %}
+          {% if total > 0 and sec.done == total %}<span class="done-badge" title="Splněno úplně všechno">Hujer</span>{% endif %}
           <span class="meta">{{ sec.done }} / {{ total }}</span>
           <span class="progress progress-mini"><span class="progress-bar bg-success" style="width: {{ (sec.done * 100 / total)|round|int if total else 0 }}%"></span></span>
         </summary>
