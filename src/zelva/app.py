@@ -5,17 +5,19 @@ import os
 import re
 import sqlite3
 from functools import wraps
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
-from flask import Flask, current_app, g, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, current_app, flash, g, jsonify, redirect, render_template, request, send_file, session, url_for
 
 from . import ai_review, python_course
+from .content_transfer import read_content_upload
 
 
-LOGIN_DOMAIN = "gymnzidlo.cz"
+LOGIN_DOMAINS = ("gymnzidlo.cz", "gymkren.cz")
 DEFAULT_ADMIN_EMAIL = "waldhans.m@gymnzidlo.cz"
 
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
@@ -378,19 +380,15 @@ def _is_allowed_login_email(email: str) -> bool:
     if email.count("@") != 1:
         return False
 
-    domain = email.rsplit("@", 1)[1]
+    domain = email.rsplit("@", 1)[1].lower()
     labels = domain.split(".")
     if any(not label for label in labels):
         return False
 
-    def is_allowed_domain(remaining_labels: list[str]) -> bool:
-        if ".".join(remaining_labels) == LOGIN_DOMAIN:
-            return True
-        if len(remaining_labels) <= 1:
-            return False
-        return is_allowed_domain(remaining_labels[1:])
-
-    return is_allowed_domain(labels)
+    return any(
+        domain == allowed_domain or domain.endswith("." + allowed_domain)
+        for allowed_domain in LOGIN_DOMAINS
+    )
 
 
 def _admin_required(view):
@@ -740,6 +738,153 @@ def create_app(test_config: dict | None = None) -> Flask:
             custom_pattern_ids_json=json.dumps(list(custom_patterns), ensure_ascii=False),
             overrides_json=json.dumps(overrides, ensure_ascii=False, indent=2),
         )
+
+    @app.get("/admin/content/turtle/export")
+    @_admin_required
+    def export_turtle_content():
+        payload = {
+            "format": "zelva-content",
+            "version": 1,
+            "area": "zelva",
+            "overrides": _load_pattern_overrides(app),
+            "custom_patterns": _load_custom_patterns(app),
+            "deleted_patterns": sorted(_load_deleted_patterns(app)),
+            "category_order": _load_category_order(),
+        }
+        content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+        return send_file(
+            BytesIO(content),
+            mimetype="application/json",
+            as_attachment=True,
+            download_name="zelva-vyukovy-obsah.json",
+        )
+
+    @app.post("/admin/content/turtle/import")
+    @_admin_required
+    def import_turtle_content():
+        try:
+            payload = read_content_upload(request.files.get("file"), "zelva")
+            raw_custom = payload.get("custom_patterns", {})
+            raw_overrides = payload.get("overrides", {})
+            raw_deleted = payload.get("deleted_patterns", [])
+            raw_categories = payload.get("category_order", [])
+            if not isinstance(raw_custom, dict) or not isinstance(raw_overrides, dict):
+                raise ValueError("Soubor obsahuje neplatné vzory nebo přepisy.")
+            if not isinstance(raw_deleted, list) or not all(
+                isinstance(pattern_id, str) for pattern_id in raw_deleted
+            ):
+                raise ValueError("Seznam odstraněných úloh není platný.")
+            if not isinstance(raw_categories, list) or not all(
+                isinstance(category, str) for category in raw_categories
+            ):
+                raise ValueError("Pořadí kategorií není platné.")
+
+            built_in_ids = set(_pattern_ids_from_source())
+            imported_custom = {}
+            for pattern_id, item in raw_custom.items():
+                if not isinstance(pattern_id, str) or not isinstance(item, dict):
+                    raise ValueError("Soubor obsahuje neplatnou vlastní úlohu.")
+                if pattern_id in built_in_ids:
+                    raise ValueError(f"ID {pattern_id} patří vestavěné úloze.")
+                sanitized = _sanitize_custom_pattern({**item, "id": pattern_id})
+                if sanitized is None or sanitized[0] != pattern_id:
+                    raise ValueError(f"Vlastní úloha {pattern_id} není platná.")
+                imported_custom[pattern_id] = sanitized[1]
+
+            valid_pattern_ids = built_in_ids | set(_load_custom_patterns(app)) | set(imported_custom)
+            imported_overrides = {}
+            allowed_override_keys = {
+                "category", "name", "hint", "initial_text", "initial_lines",
+                "commands", "start_x", "start_y", "start_angle",
+            }
+            for pattern_id, override in raw_overrides.items():
+                if (
+                    not isinstance(pattern_id, str)
+                    or pattern_id not in valid_pattern_ids
+                    or not isinstance(override, dict)
+                    or not set(override).issubset(allowed_override_keys)
+                ):
+                    raise ValueError("Soubor obsahuje neplatný přepis vzoru.")
+                imported_overrides[pattern_id] = _sanitize_pattern_override(override)
+
+            if any(pattern_id not in built_in_ids for pattern_id in raw_deleted):
+                raise ValueError("Odstraněný seznam obsahuje neznámou vestavěnou úlohu.")
+            categories = []
+            for category in raw_categories:
+                category = category.strip()
+                if category and category not in categories:
+                    categories.append(category)
+            if len(categories) > 200 or any(len(category) > 100 for category in categories):
+                raise ValueError("Seznam kategorií je příliš dlouhý.")
+
+            db = _get_db()
+            existing_categories = _load_category_order()
+            existing_custom_ids = set(_load_custom_patterns(app))
+            merged_categories = categories + [
+                category for category in existing_categories if category not in categories
+            ]
+            db.execute("BEGIN IMMEDIATE")
+            for pattern_id, pattern in imported_custom.items():
+                db.execute(
+                    """
+                    INSERT OR REPLACE INTO custom_patterns
+                        (pattern_id, category, name, hint, initial_text, initial_lines,
+                         commands_json, start_x, start_y, start_angle)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        pattern_id,
+                        pattern.get("category") or "Obecne",
+                        pattern.get("name") or pattern_id,
+                        pattern.get("hint") or "",
+                        pattern.get("initial_text") or "",
+                        pattern.get("initial_lines") or 2,
+                        json.dumps(pattern.get("commands") or [], ensure_ascii=False),
+                        pattern.get("start_x"),
+                        pattern.get("start_y"),
+                        pattern.get("start_angle"),
+                    ),
+                )
+            for pattern_id, override in imported_overrides.items():
+                db.execute(
+                    """
+                    INSERT OR REPLACE INTO pattern_overrides
+                        (pattern_id, category, name, hint, initial_text, initial_lines,
+                         commands_json, start_x, start_y, start_angle)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        pattern_id,
+                        override.get("category"),
+                        override.get("name"),
+                        override.get("hint"),
+                        override.get("initial_text"),
+                        override.get("initial_lines"),
+                        json.dumps(override.get("commands"), ensure_ascii=False)
+                        if "commands" in override else None,
+                        override.get("start_x"),
+                        override.get("start_y"),
+                        override.get("start_angle"),
+                    ),
+                )
+            db.executemany(
+                "INSERT OR IGNORE INTO deleted_patterns (pattern_id) VALUES (?)",
+                [(pattern_id,) for pattern_id in raw_deleted],
+            )
+            db.execute("DELETE FROM category_order")
+            db.executemany(
+                "INSERT INTO category_order (category, position) VALUES (?, ?)",
+                [(category, position) for position, category in enumerate(merged_categories)],
+            )
+            db.commit()
+            added = len(set(imported_custom) - existing_custom_ids)
+            flash(
+                f"Import Želvy dokončen: {added} nových a "
+                f"{len(imported_custom) - added} aktualizovaných vlastních úloh."
+            )
+        except ValueError as error:
+            flash(str(error), "error")
+        return redirect(url_for("admin"))
 
     @app.get("/admin/results")
     @_admin_required

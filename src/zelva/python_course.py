@@ -6,6 +6,7 @@ u?ivatele jen odvod? roli (u?itel/student).
 """
 import os
 import re
+import json
 import sqlite3
 import subprocess
 import sys
@@ -14,13 +15,85 @@ import random
 import time
 from datetime import datetime
 from functools import wraps
+from io import BytesIO
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytz
 from flask import (
-    Blueprint, current_app, flash, redirect, render_template, request, session, url_for,
+    Blueprint, current_app, flash, jsonify, redirect, render_template, request, send_file, session, url_for,
 )
 
+from .content_transfer import read_content_upload
+
 bp = Blueprint("python", __name__, url_prefix="/python")
+
+AZ_BOARD_SIZE = 4
+AZ_SHAPES = ("●", "▲", "■", "◆", "★", "✚")
+AZ_SHAPE_INTERVAL_MS = 600
+AZ_REACTION_WINDOW_MS = 1200
+
+AZ_QUESTIONS = [
+    {
+        "question": "Jaký typ vrátí výraz 3 / 2 v Pythonu 3?",
+        "options": ["int", "float", "str", "bool"],
+        "answer": 1,
+    },
+    {
+        "question": "Který zápis vytvoří prázdný seznam?",
+        "options": ["{}", "()", "[]", "set()"],
+        "answer": 2,
+    },
+    {
+        "question": "Co vypíše print(len('želva'))?",
+        "options": ["4", "5", "6", "Chybu"],
+        "answer": 1,
+    },
+    {
+        "question": "Které klíčové slovo vrací hodnotu z funkce?",
+        "options": ["yield", "return", "break", "pass"],
+        "answer": 1,
+    },
+    {
+        "question": "Jak se správně porovnává, zda jsou dvě hodnoty stejné?",
+        "options": ["=", "==", "!=", ":="],
+        "answer": 1,
+    },
+    {
+        "question": "Jaký bude výsledek výrazu 2 ** 3?",
+        "options": ["6", "8", "9", "5"],
+        "answer": 1,
+    },
+    {
+        "question": "Která metoda přidá prvek na konec seznamu?",
+        "options": ["add()", "push()", "append()", "insert_end()"],
+        "answer": 2,
+    },
+    {
+        "question": "Jak začíná definice funkce s názvem pozdrav?",
+        "options": ["function pozdrav():", "def pozdrav():", "func pozdrav():", "define pozdrav():"],
+        "answer": 1,
+    },
+    {
+        "question": "Co vrátí bool(0)?",
+        "options": ["True", "False", "0", "None"],
+        "answer": 1,
+    },
+    {
+        "question": "Který cyklus se běžně používá k procházení prvků seznamu?",
+        "options": ["for", "switch", "repeat", "loop"],
+        "answer": 0,
+    },
+    {
+        "question": "Jaký typ dat ukládá dvojice klíč–hodnota?",
+        "options": ["list", "tuple", "dict", "set"],
+        "answer": 2,
+    },
+    {
+        "question": "Co vypíše print('Py' + 'thon')?",
+        "options": ["Py thon", "Python", "Py+thon", "Chybu"],
+        "answer": 1,
+    },
+]
 
 
 def database_path(app):
@@ -226,6 +299,100 @@ def init_db(database_path):
             PRIMARY KEY(class_id, section)
         );
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS az_games (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            player_a_email TEXT NOT NULL,
+            player_a_name TEXT NOT NULL,
+            player_b_email TEXT,
+            player_b_name TEXT,
+            status TEXT NOT NULL,
+            turn_email TEXT,
+            board TEXT NOT NULL,
+            question_index INTEGER,
+            winner_email TEXT,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    try:
+        conn.execute("ALTER TABLE az_games ADD COLUMN current_question TEXT")
+    except sqlite3.OperationalError:
+        pass
+    for column, definition in (
+        ("challenge_cell", "INTEGER"),
+        ("challenge_started_at", "REAL"),
+        ("challenge_target_ms", "INTEGER"),
+        ("challenge_frames", "TEXT"),
+        ("challenge_reactions", "TEXT"),
+        ("challenge_active", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        try:
+            conn.execute(f"ALTER TABLE az_games ADD COLUMN {column} {definition}")
+        except sqlite3.OperationalError:
+            pass
+    conn.execute("""
+        CREATE INDEX IF NOT EXISTS idx_az_games_waiting
+        ON az_games(status, created_at)
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS az_questions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            question TEXT NOT NULL,
+            options TEXT NOT NULL,
+            answer INTEGER NOT NULL,
+            active INTEGER NOT NULL DEFAULT 1,
+            source_key TEXT
+        )
+    """)
+    try:
+        conn.execute("ALTER TABLE az_questions ADD COLUMN source_key TEXT")
+    except sqlite3.OperationalError:
+        pass
+    if conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0] == 0:
+        conn.executemany(
+            "INSERT INTO az_questions (question, options, answer, source_key) VALUES (?, ?, ?, ?)",
+            [
+                (
+                    question["question"],
+                    json.dumps(question["options"], ensure_ascii=False),
+                    question["answer"],
+                    uuid5(NAMESPACE_URL, "zelva:azkviz:" + question["question"]).hex,
+                )
+                for question in AZ_QUESTIONS
+            ],
+        )
+    for row in conn.execute(
+        "SELECT id, question FROM az_questions WHERE source_key IS NULL OR source_key = ''"
+    ).fetchall():
+        default_key = next(
+            (
+                uuid5(NAMESPACE_URL, "zelva:azkviz:" + question["question"]).hex
+                for question in AZ_QUESTIONS
+                if question["question"] == row["question"]
+            ),
+            uuid4().hex,
+        )
+        conn.execute(
+            "UPDATE az_questions SET source_key = ? WHERE id = ?",
+            (default_key, row["id"]),
+        )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_az_questions_source_key "
+        "ON az_questions(source_key)"
+    )
+    for game in conn.execute(
+        "SELECT id, board FROM az_games WHERE status IN ('waiting', 'playing')"
+    ).fetchall():
+        if len(json.loads(game["board"])) != AZ_BOARD_SIZE * (AZ_BOARD_SIZE + 1) // 2:
+            conn.execute(
+                """
+                UPDATE az_games
+                SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (game["id"],),
+            )
     conn.commit()
     conn.close()
 
@@ -294,6 +461,961 @@ def login_required(f):
     return decorated_function
 
 
+def _az_player_required():
+    if session.get("role") not in ("student", "teacher"):
+        return {"error": "AZ kvíz je dostupný pouze přihlášeným uživatelům."}, 403
+    return None
+
+
+def _az_admin_redirect():
+    email = session.get("username", "").strip().lower()
+    admin_email = (current_app.config.get("ADMIN_EMAIL") or "").strip().lower()
+    if session.get("role") != "teacher" or email != admin_email:
+        flash("Správa otázek je dostupná pouze administrátorovi.")
+        return redirect(url_for("index"))
+    return None
+
+
+def _az_question_payload(row):
+    options = json.loads(row["options"])
+    answer = row["answer"]
+    choices = list(enumerate(options))
+    random.shuffle(choices)
+    return {
+        "id": row["id"],
+        "question": row["question"],
+        "options": [option for _index, option in choices],
+        "answer": next(
+            index for index, (original_index, _option) in enumerate(choices)
+            if original_index == answer
+        ),
+    }
+
+
+def _az_next_question(conn, current_question=None):
+    rows = conn.execute(
+        "SELECT id, question, options, answer FROM az_questions WHERE active = 1"
+    ).fetchall()
+    if not rows:
+        raise RuntimeError("V AZ kvízu není žádná aktivní otázka.")
+    available = [
+        row for row in rows
+        if current_question is None or row["id"] != current_question.get("id")
+    ]
+    return _az_question_payload(random.choice(available or rows))
+
+
+def _az_connected(board, email):
+    coordinates = [
+        (q, AZ_BOARD_SIZE - 1 - row)
+        for row in range(AZ_BOARD_SIZE)
+        for q in range(row + 1)
+    ]
+    coordinate_indexes = {coordinate: index for index, coordinate in enumerate(coordinates)}
+    sides = (
+        {index for index, (q, _r) in enumerate(coordinates) if q == 0},
+        {index for index, (_q, r) in enumerate(coordinates) if r == 0},
+        {
+            index
+            for index, (q, r) in enumerate(coordinates)
+            if q + r == AZ_BOARD_SIZE - 1
+        },
+    )
+    if len(board) != len(coordinates):
+        return False
+
+    visited = set()
+    pending = [index for index, cell in enumerate(board) if cell == email]
+    directions = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, -1), (-1, 1))
+
+    while pending:
+        index = pending.pop()
+        if index in visited:
+            continue
+        visited.add(index)
+        q, r = coordinates[index]
+        for dq, dr in directions:
+            neighbor = coordinate_indexes.get((q + dq, r + dr))
+            if neighbor is not None and neighbor not in visited and board[neighbor] == email:
+                pending.append(neighbor)
+    return all(visited & side for side in sides)
+
+
+def _az_new_challenge():
+    target_index = random.randint(10, 16)
+    frames = []
+    for _ in range(target_index):
+        first, second = random.sample(AZ_SHAPES, 2)
+        frames.append([first, second])
+    matching_shape = random.choice(AZ_SHAPES)
+    frames.append([matching_shape, matching_shape])
+    return {
+        "started_at": time.time() * 1000,
+        "target_ms": target_index * AZ_SHAPE_INTERVAL_MS,
+        "frames": frames,
+    }
+
+
+def _az_challenge_view(game, email):
+    if not game["challenge_active"]:
+        return None
+    reactions = json.loads(game["challenge_reactions"] or "{}")
+    opponent_email = (
+        game["player_b_email"]
+        if email == game["player_a_email"]
+        else game["player_a_email"]
+    )
+    return {
+        "cell": game["challenge_cell"],
+        "started_at": game["challenge_started_at"],
+        "target_ms": game["challenge_target_ms"],
+        "frames": json.loads(game["challenge_frames"]),
+        "interval_ms": AZ_SHAPE_INTERVAL_MS,
+        "reaction_window_ms": AZ_REACTION_WINDOW_MS,
+        "my_reacted": email in reactions,
+        "opponent_reacted": opponent_email in reactions,
+    }
+
+
+def _az_finish_challenge(conn, game, reactions):
+    board = json.loads(game["board"])
+    challenge_cell = game["challenge_cell"]
+    if reactions:
+        winner_email = min(reactions, key=reactions.get)
+        board[challenge_cell] = winner_email
+        status = "playing"
+        next_turn = (
+            game["player_b_email"]
+            if winner_email == game["player_a_email"]
+            else game["player_a_email"]
+        )
+        feedback = "Souboj dokončen. Pole získal hráč s kratším reakčním časem."
+    else:
+        winner_email = None
+        status = "playing"
+        next_turn = (
+            game["player_b_email"]
+            if game["turn_email"] == game["player_a_email"]
+            else game["player_a_email"]
+        )
+        feedback = "Nikdo nestiskl mezerník včas. Pole zůstává šedé."
+
+    if status != "finished" and all(board):
+        status = "finished"
+        winner_email = None
+        next_turn = None
+
+    next_question = (
+        _az_next_question(conn, json.loads(game["current_question"]))
+        if status == "playing" else None
+    )
+    conn.execute(
+        """
+        UPDATE az_games
+        SET board = ?, status = ?, turn_email = ?, current_question = ?,
+            question_index = NULL, winner_email = ?, challenge_active = 0,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            json.dumps(board, ensure_ascii=False),
+            status,
+            next_turn,
+            json.dumps(next_question, ensure_ascii=False) if next_question else None,
+            winner_email,
+            game["id"],
+        ),
+    )
+    updated_game = conn.execute(
+        "SELECT * FROM az_games WHERE id = ?", (game["id"],)
+    ).fetchone()
+    return updated_game, feedback
+
+
+def _az_game_view(game, email):
+    player_a = game["player_a_email"] == email
+    my_name = game["player_a_name"] if player_a else game["player_b_name"]
+    opponent_name = game["player_b_name"] if player_a else game["player_a_name"]
+    player_a_name = game["player_a_name"]
+    player_b_name = game["player_b_name"]
+    color_a = "A"
+    color_b = "B"
+    board = json.loads(game["board"])
+    question = None
+    my_turn = game["status"] == "playing" and game["turn_email"] == email
+    if my_turn and not game["challenge_active"] and game["current_question"]:
+        item = json.loads(game["current_question"])
+        question = {"text": item["question"], "options": item["options"]}
+    elif my_turn and not game["challenge_active"] and game["question_index"] is not None:
+        item = AZ_QUESTIONS[game["question_index"]]
+        question = {"text": item["question"], "options": item["options"]}
+
+    winner = None
+    if game["status"] == "finished":
+        if game["winner_email"] is None:
+            winner = "draw"
+        else:
+            winner = "you" if game["winner_email"] == email else "opponent"
+
+    return {
+        "id": game["id"],
+        "status": game["status"],
+        "board_size": AZ_BOARD_SIZE,
+        "board": [
+            color_a if cell == game["player_a_email"]
+            else color_b if cell == game["player_b_email"] and cell is not None
+            else "X" if cell == "X"
+            else None
+            for cell in board
+        ],
+        "my_color": color_a if player_a else color_b,
+        "my_turn": my_turn,
+        "my_name": my_name,
+        "opponent_name": opponent_name,
+        "winner": winner,
+        "winner_name": (
+            player_a_name if game["winner_email"] == game["player_a_email"]
+            else player_b_name if game["winner_email"] == game["player_b_email"]
+            else None
+        ),
+        "challenge": _az_challenge_view(game, email),
+        "question": question,
+    }
+
+
+@bp.route("/azkviz")
+@login_required
+def azkviz():
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        games = conn.execute(
+            """
+            SELECT * FROM az_games
+            WHERE status = 'finished'
+              AND (player_a_email = ? OR player_b_email = ?)
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (email, email),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    wins = sum(game["winner_email"] == email for game in games)
+    losses = sum(
+        game["winner_email"] is not None and game["winner_email"] != email
+        for game in games
+    )
+    draws = len(games) - wins - losses
+    opponents = {}
+    history = []
+    for game in games:
+        is_player_a = game["player_a_email"] == email
+        opponent_email = game["player_b_email"] if is_player_a else game["player_a_email"]
+        opponent_name = game["player_b_name"] if is_player_a else game["player_a_name"]
+        opponent = opponents.setdefault(
+            opponent_email,
+            {"name": opponent_name, "wins": 0, "losses": 0, "draws": 0},
+        )
+        result = (
+            "draw" if game["winner_email"] is None
+            else "win" if game["winner_email"] == email
+            else "loss"
+        )
+        opponent[{"win": "wins", "loss": "losses", "draw": "draws"}[result]] += 1
+        history.append({
+            "opponent_name": opponent_name,
+            "result": result,
+            "played_at": game["updated_at"],
+        })
+
+    return render_template(
+        "python/azkviz.html",
+        stats={"wins": wins, "losses": losses, "draws": draws, "played": len(games)},
+        opponents=sorted(opponents.values(), key=lambda item: item["name"].lower()),
+        history=history[:20],
+        is_admin=email == (current_app.config.get("ADMIN_EMAIL") or "").strip().lower(),
+    )
+
+
+@bp.route("/admin/azkviz/questions", methods=["GET", "POST"])
+@login_required
+def azkviz_admin_questions():
+    denied = _az_admin_redirect()
+    if denied:
+        return denied
+
+    conn = get_db_connection()
+    try:
+        if request.method == "POST":
+            action = request.form.get("action", "")
+            question_id_raw = request.form.get("question_id", "")
+            question_id = int(question_id_raw) if question_id_raw.isdigit() else None
+
+            if action == "delete":
+                existing = conn.execute(
+                    "SELECT active FROM az_questions WHERE id = ?", (question_id,)
+                ).fetchone()
+                if not existing:
+                    flash("Otázku se nepodařilo najít.", "error")
+                elif existing["active"] and conn.execute(
+                    "SELECT COUNT(*) FROM az_questions WHERE active = 1"
+                ).fetchone()[0] <= 1:
+                    flash("Musí zůstat alespoň jedna aktivní otázka.", "error")
+                else:
+                    conn.execute("DELETE FROM az_questions WHERE id = ?", (question_id,))
+                    conn.commit()
+                    flash("Otázka byla smazána.")
+                return redirect(url_for("python.azkviz_admin_questions"))
+
+            question_text = request.form.get("question", "").strip()
+            options = [option.strip() for option in request.form.get("options", "").splitlines()]
+            options = [option for option in options if option]
+            answer_raw = request.form.get("answer", "")
+            active = int(request.form.get("active") == "1")
+            if (
+                action not in ("create", "update")
+                or not question_text
+                or len(question_text) > 500
+                or not 2 <= len(options) <= 6
+                or any(len(option) > 120 for option in options)
+                or not answer_raw.isdigit()
+                or not 0 <= int(answer_raw) < len(options)
+            ):
+                flash("Vyplň otázku, 2 až 6 odpovědí a označ správnou odpověď.", "error")
+                return redirect(url_for("python.azkviz_admin_questions"))
+
+            current_active = conn.execute(
+                "SELECT COUNT(*) FROM az_questions WHERE active = 1"
+            ).fetchone()[0]
+            existing = None
+            if action == "update":
+                existing = conn.execute(
+                    "SELECT active FROM az_questions WHERE id = ?", (question_id,)
+                ).fetchone()
+                if not existing:
+                    flash("Otázku se nepodařilo najít.", "error")
+                    return redirect(url_for("python.azkviz_admin_questions"))
+            next_active_count = current_active - (
+                int(existing["active"]) if existing else 0
+            ) + active
+            if next_active_count < 1:
+                flash("Musí zůstat alespoň jedna aktivní otázka.", "error")
+                return redirect(url_for("python.azkviz_admin_questions"))
+
+            if action == "create":
+                conn.execute(
+                    """
+                    INSERT INTO az_questions (question, options, answer, active, source_key)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        question_text,
+                        json.dumps(options, ensure_ascii=False),
+                        int(answer_raw),
+                        active,
+                        uuid4().hex,
+                    ),
+                )
+                message = "Otázka byla přidána."
+            else:
+                conn.execute(
+                    """
+                    UPDATE az_questions
+                    SET question = ?, options = ?, answer = ?, active = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        question_text,
+                        json.dumps(options, ensure_ascii=False),
+                        int(answer_raw),
+                        active,
+                        question_id,
+                    ),
+                )
+                message = "Otázka byla uložena."
+            conn.commit()
+            flash(message)
+            return redirect(url_for("python.azkviz_admin_questions"))
+
+        questions = conn.execute(
+            "SELECT id, question, options, answer, active FROM az_questions ORDER BY id"
+        ).fetchall()
+        question_items = [
+            {**dict(question), "options": json.loads(question["options"])}
+            for question in questions
+        ]
+        return render_template(
+            "python/azkviz_admin_questions.html",
+            questions=question_items,
+        )
+    finally:
+        conn.close()
+
+
+@bp.get("/admin/azkviz/questions/export")
+@login_required
+def azkviz_export_questions():
+    denied = _az_admin_redirect()
+    if denied:
+        return denied
+
+    conn = get_db_connection()
+    try:
+        questions = [
+            {
+                "id": row["id"],
+                "question": row["question"],
+                "options": json.loads(row["options"]),
+                "answer": row["answer"],
+                "active": bool(row["active"]),
+                "source_key": row["source_key"],
+            }
+            for row in conn.execute(
+                "SELECT id, question, options, answer, active, source_key "
+                "FROM az_questions ORDER BY id"
+            ).fetchall()
+        ]
+    finally:
+        conn.close()
+    payload = {
+        "format": "zelva-content",
+        "version": 1,
+        "area": "azkviz",
+        "items": questions,
+    }
+    content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    return send_file(
+        BytesIO(content),
+        mimetype="application/json",
+        as_attachment=True,
+        download_name="azkviz-otazky.json",
+    )
+
+
+@bp.post("/admin/azkviz/questions/import")
+@login_required
+def azkviz_import_questions():
+    denied = _az_admin_redirect()
+    if denied:
+        return denied
+
+    try:
+        payload = read_content_upload(request.files.get("file"), "azkviz")
+        items = payload.get("items")
+        if not isinstance(items, list) or not items or len(items) > 5000:
+            raise ValueError("Soubor musí obsahovat 1 až 5000 otázek.")
+        imported = []
+        imported_ids = set()
+        imported_source_keys = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("Soubor obsahuje neplatnou otázku.")
+            question_id = item.get("id")
+            question = item.get("question")
+            options = item.get("options")
+            answer = item.get("answer")
+            active = item.get("active")
+            source_key = item.get("source_key")
+            if (
+                type(question_id) is not int
+                or question_id < 1
+                or question_id in imported_ids
+                or (
+                    source_key is not None
+                    and (
+                        not isinstance(source_key, str)
+                        or not re.fullmatch(r"[0-9a-f]{32}", source_key)
+                        or source_key in imported_source_keys
+                    )
+                )
+                or not isinstance(question, str)
+                or not question.strip()
+                or len(question.strip()) > 500
+                or not isinstance(options, list)
+                or not 2 <= len(options) <= 6
+                or any(not isinstance(option, str) or not option.strip() or len(option.strip()) > 120 for option in options)
+                or type(answer) is not int
+                or not 0 <= answer < len(options)
+                or not isinstance(active, bool)
+            ):
+                raise ValueError("Otázka má neplatné ID, text, možnosti, správnou odpověď nebo stav.")
+            imported_ids.add(question_id)
+            if source_key:
+                imported_source_keys.add(source_key)
+            imported.append(
+                (
+                    question_id,
+                    question.strip(),
+                    json.dumps([option.strip() for option in options], ensure_ascii=False),
+                    answer,
+                    int(active),
+                    source_key,
+                )
+            )
+    except ValueError as error:
+        flash(str(error), "error")
+        return redirect(url_for("python.azkviz_admin_questions"))
+
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing_rows = conn.execute(
+            "SELECT id, question, source_key FROM az_questions"
+        ).fetchall()
+        existing_by_id = {row["id"]: row for row in existing_rows}
+        existing_by_source = {
+            row["source_key"]: row for row in existing_rows if row["source_key"]
+        }
+        added = 0
+        updated = 0
+        for question_id, question, options, answer, active, source_key in imported:
+            existing = existing_by_source.get(source_key) if source_key else None
+            if existing is None and source_key is None:
+                legacy_id_match = existing_by_id.get(question_id)
+                if legacy_id_match and legacy_id_match["question"] == question:
+                    existing = legacy_id_match
+                else:
+                    existing = next(
+                        (
+                            row for row in existing_rows
+                            if row["question"] == question
+                        ),
+                        None,
+                    )
+            if existing is not None:
+                conn.execute(
+                    """
+                    UPDATE az_questions
+                    SET question = ?, options = ?, answer = ?, active = ?
+                    WHERE id = ?
+                    """,
+                    (question, options, answer, active, existing["id"]),
+                )
+                updated += 1
+            else:
+                if source_key is None and question_id not in existing_by_id:
+                    conn.execute(
+                        """
+                        INSERT INTO az_questions (id, question, options, answer, active, source_key)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (question_id, question, options, answer, active, uuid4().hex),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO az_questions (question, options, answer, active, source_key)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (question, options, answer, active, source_key or uuid4().hex),
+                    )
+                added += 1
+                inserted = conn.execute(
+                    "SELECT id, question, source_key FROM az_questions WHERE id = last_insert_rowid()"
+                ).fetchone()
+                if inserted:
+                    existing_rows.append(inserted)
+                    existing_by_id[inserted["id"]] = inserted
+                    existing_by_source[inserted["source_key"]] = inserted
+        if conn.execute("SELECT COUNT(*) FROM az_questions WHERE active = 1").fetchone()[0] < 1:
+            conn.rollback()
+            flash("Po importu musí zůstat alespoň jedna aktivní otázka.", "error")
+            return redirect(url_for("python.azkviz_admin_questions"))
+        conn.commit()
+        flash(
+            f"Import otázek dokončen: {added} nových a {updated} aktualizovaných otázek."
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return redirect(url_for("python.azkviz_admin_questions"))
+
+
+@bp.route("/azkviz/match", methods=["POST"])
+@login_required
+def azkviz_match():
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+
+    email = session["username"]
+    name = (session.get("user") or {}).get("name") or email
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            """
+            UPDATE az_games SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+            WHERE status IN ('waiting', 'playing')
+              AND updated_at < datetime('now', '-30 minutes')
+            """
+        )
+        game = conn.execute(
+            """
+            SELECT * FROM az_games
+            WHERE status IN ('waiting', 'playing')
+              AND (player_a_email = ? OR player_b_email = ?)
+            ORDER BY id DESC LIMIT 1
+            """,
+            (email, email),
+        ).fetchone()
+
+        if game is None:
+            game = conn.execute(
+                """
+                SELECT * FROM az_games
+                WHERE status = 'waiting' AND player_a_email <> ?
+                ORDER BY created_at, id LIMIT 1
+                """,
+                (email,),
+            ).fetchone()
+            if game:
+                question = _az_next_question(conn)
+                conn.execute(
+                    """
+                    UPDATE az_games
+                    SET player_b_email = ?, player_b_name = ?, status = 'playing',
+                        turn_email = player_a_email, current_question = ?,
+                        question_index = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND status = 'waiting'
+                    """,
+                    (email, name, json.dumps(question, ensure_ascii=False), None, game["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO az_games
+                        (player_a_email, player_a_name, status, turn_email, board, question_index)
+                    VALUES (?, ?, 'waiting', NULL, ?, NULL)
+                    """,
+                    (email, name, json.dumps([None] * (AZ_BOARD_SIZE * (AZ_BOARD_SIZE + 1) // 2))),
+                )
+        conn.commit()
+        game_id = game["id"] if game else conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        return jsonify(_az_game_view(game, email))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@bp.route("/azkviz/game/<int:game_id>")
+@login_required
+def azkviz_game_state(game_id):
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            conn.rollback()
+            return jsonify({"error": "Hra nebyla nalezena."}), 404
+        if email not in (game["player_a_email"], game["player_b_email"]):
+            conn.rollback()
+            return jsonify({"error": "K této hře nemáte přístup."}), 403
+        feedback = None
+        if game["challenge_active"]:
+            reactions = json.loads(game["challenge_reactions"] or "{}")
+            challenge_ended = (
+                time.time() * 1000
+                >= game["challenge_started_at"]
+                + game["challenge_target_ms"]
+                + AZ_REACTION_WINDOW_MS
+            )
+            if challenge_ended:
+                game, feedback = _az_finish_challenge(conn, game, reactions)
+        conn.commit()
+        response = _az_game_view(game, email)
+        if feedback:
+            response["feedback"] = feedback
+        return jsonify(response)
+    finally:
+        conn.close()
+
+
+@bp.route("/azkviz/game/<int:game_id>/challenge", methods=["POST"])
+@login_required
+def azkviz_start_challenge(game_id):
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+    data = request.get_json()
+    cell = data.get("cell") if isinstance(data, dict) else None
+    if type(cell) is not int:
+        return jsonify({"error": "Vyber šedé pole."}), 400
+
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            conn.rollback()
+            return jsonify({"error": "Hra nebyla nalezena."}), 404
+        if email not in (game["player_a_email"], game["player_b_email"]):
+            conn.rollback()
+            return jsonify({"error": "K této hře nemáte přístup."}), 403
+        if game["status"] != "playing":
+            conn.rollback()
+            return jsonify({"error": "Hra právě neprobíhá."}), 409
+        if game["challenge_active"]:
+            conn.rollback()
+            return jsonify({"error": "Souboj o šedé pole už probíhá."}), 409
+
+        board = json.loads(game["board"])
+        if not 0 <= cell < len(board) or board[cell] != "X":
+            conn.rollback()
+            return jsonify({"error": "Toto pole není šedé."}), 409
+
+        challenge = _az_new_challenge()
+        conn.execute(
+            """
+            UPDATE az_games
+            SET challenge_cell = ?, challenge_started_at = ?,
+                challenge_target_ms = ?, challenge_frames = ?,
+                challenge_reactions = '{}', challenge_active = 1,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                cell,
+                challenge["started_at"],
+                challenge["target_ms"],
+                json.dumps(challenge["frames"], ensure_ascii=False),
+                game_id,
+            ),
+        )
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        conn.commit()
+        return jsonify(_az_game_view(game, email))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@bp.route("/azkviz/game/<int:game_id>/challenge/react", methods=["POST"])
+@login_required
+def azkviz_challenge_react(game_id):
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            conn.rollback()
+            return jsonify({"error": "Hra nebyla nalezena."}), 404
+        if email not in (game["player_a_email"], game["player_b_email"]):
+            conn.rollback()
+            return jsonify({"error": "K této hře nemáte přístup."}), 403
+        if not game["challenge_active"]:
+            conn.rollback()
+            return jsonify({"error": "Souboj o šedé pole právě neprobíhá."}), 409
+
+        now_ms = time.time() * 1000
+        target_at = game["challenge_started_at"] + game["challenge_target_ms"]
+        if now_ms >= target_at + AZ_REACTION_WINDOW_MS:
+            reactions = json.loads(game["challenge_reactions"] or "{}")
+            game, feedback = _az_finish_challenge(conn, game, reactions)
+            conn.commit()
+            return jsonify({
+                "correct": False,
+                "feedback": feedback,
+                "game": _az_game_view(game, email),
+            })
+
+        if now_ms < target_at:
+            winner_email = (
+                game["player_b_email"]
+                if email == game["player_a_email"]
+                else game["player_a_email"]
+            )
+            conn.execute(
+                """
+                UPDATE az_games
+                SET status = 'finished', winner_email = ?, turn_email = NULL,
+                    challenge_active = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (winner_email, game_id),
+            )
+            game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+            conn.commit()
+            return jsonify({
+                "correct": False,
+                "feedback": "Mezerník jsi stiskl/a dřív. Vyhrává soupeř.",
+                "game": _az_game_view(game, email),
+            })
+
+        reactions = json.loads(game["challenge_reactions"] or "{}")
+        if email in reactions:
+            conn.rollback()
+            return jsonify({"error": "Tvůj čas už je zaznamenaný."}), 409
+        reactions[email] = now_ms - target_at
+        if len(reactions) == 2:
+            game, feedback = _az_finish_challenge(conn, game, reactions)
+        else:
+            conn.execute(
+                "UPDATE az_games SET challenge_reactions = ? WHERE id = ?",
+                (json.dumps(reactions), game_id),
+            )
+            game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+            feedback = "Čas zaznamenán. Čekáme na soupeřův stisk."
+        conn.commit()
+        return jsonify({
+            "correct": True,
+            "feedback": feedback,
+            "game": _az_game_view(game, email),
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@bp.route("/azkviz/game/<int:game_id>/cancel", methods=["POST"])
+@login_required
+def azkviz_cancel(game_id):
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+
+    conn = get_db_connection()
+    try:
+        result = conn.execute(
+            """
+            UPDATE az_games SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND player_a_email = ? AND status = 'waiting'
+            """,
+            (game_id, session["username"]),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    if result.rowcount != 1:
+        return jsonify({"error": "Čekající hru už nelze zrušit."}), 409
+    return jsonify({"status": "cancelled"})
+
+
+@bp.route("/azkviz/game/<int:game_id>/answer", methods=["POST"])
+@login_required
+def azkviz_answer(game_id):
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+    data = request.get_json()
+    if not isinstance(data, dict) or type(data.get("answer")) is not int:
+        return jsonify({"error": "Odpověď musí být celé číslo."}), 400
+
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            conn.rollback()
+            return jsonify({"error": "Hra nebyla nalezena."}), 404
+        if email not in (game["player_a_email"], game["player_b_email"]):
+            conn.rollback()
+            return jsonify({"error": "K této hře nemáte přístup."}), 403
+        if game["status"] != "playing" or game["turn_email"] != email:
+            conn.rollback()
+            return jsonify({"error": "Teď nejste na tahu."}), 409
+        if game["challenge_active"]:
+            conn.rollback()
+            return jsonify({"error": "Během souboje o šedé pole nelze odpovídat na otázku."}), 409
+
+        question = (
+            json.loads(game["current_question"])
+            if game["current_question"]
+            else AZ_QUESTIONS[game["question_index"]]
+        )
+        answer = data["answer"]
+        if not 0 <= answer < len(question["options"]):
+            conn.rollback()
+            return jsonify({"error": "Vyberte platnou odpověď."}), 400
+
+        board = json.loads(game["board"])
+        correct = answer == question["answer"]
+        cell = data.get("cell")
+        if type(cell) is not int or not 0 <= cell < len(board):
+            conn.rollback()
+            return jsonify({"error": "Vyber pole na herní desce."}), 400
+        if board[cell] == "X":
+            conn.rollback()
+            return jsonify({"error": "Šedé pole se získává soubojem na mezerník."}), 409
+        if board[cell] is not None:
+            conn.rollback()
+            return jsonify({"error": "Toto pole už je obsazené."}), 409
+
+        if correct:
+            board[cell] = email
+            won = _az_connected(board, email)
+            if won:
+                status, turn_email, winner_email = "finished", None, email
+            elif all(board):
+                status, turn_email, winner_email = "finished", None, None
+            else:
+                status = "playing"
+                turn_email = game["player_b_email"] if email == game["player_a_email"] else game["player_a_email"]
+                winner_email = None
+            feedback = "Správně! Pole je vaše."
+        else:
+            board[cell] = "X"
+            if all(board):
+                status, turn_email, winner_email = "finished", None, None
+            else:
+                status = "playing"
+                turn_email = game["player_b_email"] if email == game["player_a_email"] else game["player_a_email"]
+                winner_email = None
+            feedback = "Tentokrát ne. Správná odpověď: " + question["options"][question["answer"]]
+
+        next_question = _az_next_question(conn, question) if status == "playing" else None
+        conn.execute(
+            """
+            UPDATE az_games
+            SET board = ?, status = ?, turn_email = ?, current_question = ?,
+                question_index = NULL,
+                winner_email = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (
+                json.dumps(board, ensure_ascii=False), status, turn_email,
+                json.dumps(next_question, ensure_ascii=False) if next_question else None,
+                winner_email, game_id,
+            ),
+        )
+        conn.commit()
+        updated_game = conn.execute(
+            "SELECT * FROM az_games WHERE id = ?", (game_id,)
+        ).fetchone()
+        return jsonify({
+            "correct": correct,
+            "feedback": feedback,
+            "game": _az_game_view(updated_game, email),
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 @bp.route("/teacher")
 @teacher_required
 def teacher_dashboard():
@@ -303,6 +1425,166 @@ def teacher_dashboard():
     conn.close()
     grouped = group_assignments(assignments)
     return render_template("python/teacher_dashboard.html", grouped=grouped)
+
+
+@bp.get("/teacher/content/export")
+@teacher_required
+def teacher_export_content():
+    fields = (
+        "id", "title", "description", "teacher_code", "section", "display_order",
+        "section_order", "help_text", "test_input_run", "test_input_submit",
+        "test_call_run", "test_call_submit", "precopy_lines", "active", "required",
+    )
+    conn = get_db_connection()
+    try:
+        items = []
+        for row in conn.execute(
+            "SELECT " + ", ".join(fields) + " FROM assignments ORDER BY id"
+        ).fetchall():
+            item = dict(row)
+            item["active"] = bool(item["active"])
+            item["required"] = bool(item["required"])
+            items.append(item)
+    finally:
+        conn.close()
+    payload = {
+        "format": "zelva-content",
+        "version": 1,
+        "area": "python",
+        "items": items,
+    }
+    content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    return send_file(
+        BytesIO(content),
+        mimetype="application/json",
+        as_attachment=True,
+        download_name="python-uloha.json",
+    )
+
+
+@bp.post("/teacher/content/import")
+@teacher_required
+def teacher_import_content():
+    fields = (
+        "title", "description", "teacher_code", "section", "display_order",
+        "section_order", "help_text", "test_input_run", "test_input_submit",
+        "test_call_run", "test_call_submit", "precopy_lines", "active", "required",
+    )
+    optional_text_fields = (
+        "description", "section", "help_text", "test_input_run", "test_input_submit",
+        "test_call_run", "test_call_submit",
+    )
+    try:
+        payload = read_content_upload(request.files.get("file"), "python")
+        items = payload.get("items")
+        if not isinstance(items, list) or len(items) > 5000:
+            raise ValueError("Soubor může obsahovat nejvýše 5000 úloh.")
+        imported = []
+        imported_ids = set()
+        for item in items:
+            if not isinstance(item, dict):
+                raise ValueError("Soubor obsahuje neplatnou úlohu.")
+            assignment_id = item.get("id")
+            if type(assignment_id) is not int or assignment_id < 1 or assignment_id in imported_ids:
+                raise ValueError("Úloha má neplatné nebo duplicitní ID.")
+            title = item.get("title")
+            teacher_code = item.get("teacher_code")
+            if not isinstance(title, str) or not title.strip() or len(title.strip()) > 300:
+                raise ValueError("Každá úloha musí mít platný název.")
+            if not isinstance(teacher_code, str) or len(teacher_code) > 50000:
+                raise ValueError("Každá úloha musí obsahovat platný učitelský kód.")
+            if any(
+                item.get(field) is not None and not isinstance(item.get(field), str)
+                for field in optional_text_fields
+            ):
+                raise ValueError("Textová pole úlohy obsahují neplatnou hodnotu.")
+            integer_fields = ("display_order", "section_order")
+            if any(
+                item.get(field) is not None
+                and (type(item.get(field)) is not int or abs(item[field]) > 1000000)
+                for field in integer_fields
+            ):
+                raise ValueError("Pořadí úloh musí být celé číslo.")
+            precopy_lines = item.get("precopy_lines")
+            if type(precopy_lines) is not int or not 1 <= precopy_lines <= 1000:
+                raise ValueError("Počet předvyplněných řádků musí být od 1 do 1000.")
+            if not isinstance(item.get("active"), bool) or not isinstance(item.get("required"), bool):
+                raise ValueError("Stav aktivní/povinné úlohy není platný.")
+
+            imported_ids.add(assignment_id)
+            values = {
+                field: item.get(field)
+                for field in fields
+                if field not in ("title", "teacher_code", "precopy_lines", "active", "required")
+            }
+            imported.append(
+                (
+                    assignment_id,
+                    title.strip(),
+                    teacher_code,
+                    values["description"],
+                    values["section"],
+                    values["display_order"],
+                    values["section_order"],
+                    values["help_text"],
+                    values["test_input_run"],
+                    values["test_input_submit"],
+                    values["test_call_run"],
+                    values["test_call_submit"],
+                    precopy_lines,
+                    int(item["active"]),
+                    int(item["required"]),
+                )
+            )
+    except ValueError as error:
+        flash(str(error), "danger")
+        return redirect(url_for("python.teacher_dashboard"))
+
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing_ids = {
+            row["id"]
+            for row in conn.execute("SELECT id FROM assignments").fetchall()
+        }
+        for values in imported:
+            assignment_id = values[0]
+            if assignment_id in existing_ids:
+                conn.execute(
+                    """
+                    UPDATE assignments SET
+                        title = ?, teacher_code = ?, description = ?, section = ?,
+                        display_order = ?, section_order = ?, help_text = ?,
+                        test_input_run = ?, test_input_submit = ?, test_call_run = ?,
+                        test_call_submit = ?, precopy_lines = ?, active = ?, required = ?
+                    WHERE id = ?
+                    """,
+                    values[1:] + (assignment_id,),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO assignments
+                        (id, title, teacher_code, description, section, display_order,
+                         section_order, help_text, test_input_run, test_input_submit,
+                         test_call_run, test_call_submit, precopy_lines, active, required)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
+        conn.commit()
+        added = len(imported_ids - existing_ids)
+        flash(
+            f"Import Pythonu dokončen: {added} nových a "
+            f"{len(imported) - added} aktualizovaných úloh.",
+            "success",
+        )
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return redirect(url_for("python.teacher_dashboard"))
 
 
 @bp.route("/teacher/set_active", methods=["POST"])

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Správa otázek AZ kvízu</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+    <style>
+        .question-options { min-height: 8rem; }
+        .question-card { border-left: 5px solid #bccc34; }
+        .question-card.inactive { border-left-color: #999; opacity: .8; }
+    </style>
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<main class="container">
+    <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+        <div>
+            <a href="{{ url_for('python.azkviz') }}">← Zpět do AZ kvízu</a>
+            <h1 class="h3 mt-2">Správa otázek AZ kvízu</h1>
+        </div>
+    </div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+            <div class="alert {% if category == 'error' %}alert-danger{% else %}alert-success{% endif %}" role="status">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+    <p>Možnosti piš každou na samostatný řádek. Číslo správné možnosti začíná od 0 (první možnost je 0). Rozehrané otázky se změnou neovlivní.</p>
+
+    <section class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Přenos otázek</h2>
+            <p>Import sloučí otázky podle ID: nové přidá, shodná aktualizuje a ostatní zachová.</p>
+            <a class="btn btn-outline-primary mb-2" href="{{ url_for('python.azkviz_export_questions') }}">Exportovat otázky (JSON)</a>
+            <form method="post" action="{{ url_for('python.azkviz_import_questions') }}" enctype="multipart/form-data">
+                <label for="az-question-import">Importovat otázky ze souboru JSON</label>
+                <div class="input-group">
+                    <input class="form-control" type="file" id="az-question-import" name="file" accept=".json,application/json" required>
+                    <div class="input-group-append">
+                        <button class="btn btn-outline-success" type="submit">Importovat</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </section>
+
+    <section class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Přidat otázku</h2>
+            <form method="post">
+                <input type="hidden" name="action" value="create">
+                <div class="form-group">
+                    <label for="new-question">Otázka</label>
+                    <textarea class="form-control" id="new-question" name="question" maxlength="500" required></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group col-md-8">
+                        <label for="new-options">Možnosti odpovědí (2 až 6 řádků)</label>
+                        <textarea class="form-control question-options" id="new-options" name="options" required></textarea>
+                    </div>
+                    <div class="form-group col-md-4">
+                        <label for="new-answer">Číslo správné možnosti</label>
+                        <input class="form-control" id="new-answer" name="answer" type="number" min="0" max="5" value="0" required>
+                    </div>
+                </div>
+                <label class="d-block"><input type="checkbox" name="active" value="1" checked> Aktivní v AZ kvízu</label>
+                <button class="btn btn-primary" type="submit">Přidat otázku</button>
+            </form>
+        </div>
+    </section>
+
+    <h2 class="h5 mb-3">Existující otázky</h2>
+    {% for question in questions %}
+    <section class="card question-card mb-3{% if not question.active %} inactive{% endif %}">
+        <div class="card-body">
+            <h3 class="h6">Otázka #{{ question.id }}{% if not question.active %} — neaktivní{% endif %}</h3>
+            <form method="post">
+                <input type="hidden" name="action" value="update">
+                <input type="hidden" name="question_id" value="{{ question.id }}">
+                <div class="form-group">
+                    <label for="question-{{ question.id }}">Otázka</label>
+                    <textarea class="form-control" id="question-{{ question.id }}" name="question" maxlength="500" required>{{ question.question }}</textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group col-md-8">
+                        <label for="options-{{ question.id }}">Možnosti odpovědí (každá na řádek)</label>
+                        <textarea class="form-control question-options" id="options-{{ question.id }}" name="options" required>{% for option in question.options %}{{ option }}{% if not loop.last %}
+{% endif %}{% endfor %}</textarea>
+                    </div>
+                    <div class="form-group col-md-4">
+                        <label for="answer-{{ question.id }}">Číslo správné možnosti (0 až {{ question.options|length - 1 }})</label>
+                        <input class="form-control" id="answer-{{ question.id }}" name="answer" type="number" min="0" max="5" value="{{ question.answer }}" required>
+                    </div>
+                </div>
+                <label class="d-block"><input type="checkbox" name="active" value="1"{% if question.active %} checked{% endif %}> Aktivní v AZ kvízu</label>
+                <button class="btn btn-primary" type="submit">Uložit změny</button>
+            </form>
+            <form method="post" class="mt-2" onsubmit="return confirm('Opravdu chceš tuto otázku smazat?');">
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="question_id" value="{{ question.id }}">
+                <button class="btn btn-outline-danger btn-sm" type="submit">Smazat otázku</button>
+            </form>
+        </div>
+    </section>
+    {% else %}
+    <p>V databázi zatím nejsou žádné otázky.</p>
+    {% endfor %}
+</main>
+</body>
+</html>

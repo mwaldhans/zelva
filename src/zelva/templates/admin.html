@@ -27,6 +27,22 @@
         <section class="panel admin-sidebar">
             <h1>Administrace úloh</h1>
             <p class="admin-note">Vyber úlohu, uprav její přepis a ulož. Prázdná pole se do přepisu neposílají.</p>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% for category, message in messages %}
+                    <p class="admin-status" role="status">{{ message }}</p>
+                {% endfor %}
+            {% endwith %}
+
+            <section class="new-task-form">
+                <h2>Přenos obsahu Želvy</h2>
+                <p class="admin-note">Export obsahuje přepisy, vlastní úlohy, skryté úlohy a pořadí kategorií. Import sloučí podle ID a nic dalšího nesmaže.</p>
+                <a class="secondary" href="{{ url_for('export_turtle_content') }}">Exportovat Želvu (JSON)</a>
+                <form method="post" action="{{ url_for('import_turtle_content') }}" enctype="multipart/form-data">
+                    <label for="turtle-content-import">Importovat JSON</label>
+                    <input id="turtle-content-import" type="file" name="file" accept=".json,application/json" required>
+                    <button type="submit">Importovat obsah Želvy</button>
+                </form>
+            </section>
 
             <label for="taskFilter">Najít úlohu</label>
             <input id="taskFilter" class="task-filter" type="search" placeholder="Zadej část názvu nebo ID">

@@ -63,9 +63,23 @@
 
   <div class="container mt-4">
     <h2>Cvičení podle sekcí</h2>
-    {% with messages = get_flashed_messages() %}
-      {% for m in messages %}<div class="alert alert-success">{{ m }}</div>{% endfor %}
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, m in messages %}<div class="alert {% if category == 'danger' %}alert-danger{% else %}alert-success{% endif %}" role="status">{{ m }}</div>{% endfor %}
     {% endwith %}
+    <section class="card mb-4">
+      <div class="card-body">
+        <h3 class="h5">Přenos úloh Pythonu</h3>
+        <p>Export obsahuje zadání a učitelské testy, ne odevzdání ani data žáků. Import sloučí podle ID: nové úlohy přidá, shodné aktualizuje a ostatní zachová.</p>
+        <a class="btn btn-outline-primary mb-2" href="{{ url_for('python.teacher_export_content') }}">Exportovat Python (JSON)</a>
+        <form method="post" action="{{ url_for('python.teacher_import_content') }}" enctype="multipart/form-data">
+          <label for="python-content-import">Importovat úlohy ze souboru JSON</label>
+          <div class="input-group">
+            <input class="form-control" type="file" id="python-content-import" name="file" accept=".json,application/json" required>
+            <button class="btn btn-outline-success" type="submit">Importovat</button>
+          </div>
+        </form>
+      </div>
+    </section>
     <form id="activeForm" action="{{ url_for('python.teacher_set_active') }}" method="post">
       <button type="submit" class="btn btn-success">Uložit aktivní a povinná cvičení</button>
       <button type="button" class="btn btn-outline-secondary" onclick="setAllActive(true)">Označit vše</button>

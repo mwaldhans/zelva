@@ -1,0 +1,584 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AZ kvíz | Gymnázium Židlochovice</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
+    <style>
+        .az-board { display: flex; flex-direction: column; align-items: center; gap: .2rem; margin: 1rem auto; }
+        .az-row { display: flex; justify-content: center; gap: .2rem; }
+        .az-cell { width: clamp(52px, 13vw, 82px); aspect-ratio: 1.12; border: 0; background: #e8edc9; color: #243109; font-size: 1.15rem; font-weight: 700; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
+        .az-cell:disabled { opacity: 1; }
+        .az-cell.available { cursor: pointer; }
+        .az-cell.available:hover, .az-cell.selected { outline: 3px solid #879823; outline-offset: -5px; }
+        .az-cell.owner-a { background: #ef9b87; color: #4c170d; }
+        .az-cell.owner-b { background: #81b9e5; color: #092e4a; }
+        .az-cell.owner-x { background: #aeb3b8; color: #343a40; }
+        .az-cell.owner-x.available { cursor: pointer; }
+        .az-stat { min-width: 100px; }
+        .az-reaction-panel { margin: 1rem auto; padding: 1rem; max-width: 440px; border: 2px solid #879823; border-radius: .75rem; text-align: center; background: #fff; }
+        .az-reaction-modal { width: min(92vw, 520px); border: 0; border-radius: .75rem; padding: 0; box-shadow: 0 1rem 3rem rgba(0,0,0,.3); }
+        .az-reaction-modal::backdrop { background: rgba(0,0,0,.7); }
+        .az-reaction-modal-content { padding: 1.5rem; }
+        .az-shape-pair { min-height: 5rem; display: flex; justify-content: center; align-items: center; gap: 2rem; font-size: clamp(2.5rem, 12vw, 5rem); }
+        .az-neutral-cell-note { font-size: .8rem; }
+        .az-question-modal { width: min(92vw, 520px); border: 0; border-radius: .75rem; padding: 0; box-shadow: 0 1rem 3rem rgba(0,0,0,.3); }
+        .az-question-modal::backdrop { background: rgba(0,0,0,.6); }
+        .az-question-modal-content { padding: 1.5rem; }
+        .az-answer-result { font-size: 1.15rem; font-weight: 700; }
+        .az-winner-banner { margin: .75rem 0; padding: 1.25rem; text-align: center; font-size: clamp(1.7rem, 6vw, 3rem); font-weight: 900; letter-spacing: .04em; border: 3px solid #879823; color: #1f2a07; background: #e7efc8; }
+        .az-winner-banner.opponent { border-color: #366d9b; color: #123654; background: #d9eafa; }
+    </style>
+</head>
+<body class="bg-light python-course">
+{% include "python/_header.html" %}
+<main class="container">
+    <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
+        <div>
+            <a href="{{ url_for('index') }}">← Zpět na rozcestník</a>
+            <h1 class="h3 mt-2 mb-0">AZ kvíz</h1>
+            {% if is_admin %}
+            <a class="btn btn-sm btn-outline-secondary mt-2" href="{{ url_for('python.azkviz_admin_questions') }}">Upravit otázky</a>
+            {% endif %}
+        </div>
+        <button id="start-game" type="button" class="btn btn-primary">Najít soupeře</button>
+    </div>
+    <p>Hrají dva hráči. Správná odpověď ti dovolí obsadit volné pole, chybná předá tah soupeři a označí pole šedě. Šedé pole může kdykoli vybrat kterýkoli hráč; oběma se otevře stejné reakční kolo a pole získá rychlejší hráč. Vyhraje hráč, jehož souvislá skupina polí propojí všechny tři strany trojúhelníkové desky.</p>
+    <div class="d-flex flex-wrap mb-3" aria-label="Tvoje statistiky">
+        <div class="az-stat mr-4"><strong>{{ stats.wins }}</strong><br>výher</div>
+        <div class="az-stat mr-4"><strong>{{ stats.losses }}</strong><br>proher</div>
+        <div class="az-stat mr-4"><strong>{{ stats.draws }}</strong><br>remíz</div>
+        <div class="az-stat"><strong>{{ stats.played }}</strong><br>odehraných her</div>
+    </div>
+
+    <section id="game-panel" class="card mb-4" hidden>
+        <div class="card-body">
+            <h2 class="h5">Souboj <span id="opponent-name"></span></h2>
+            <p id="game-status" role="status" aria-live="polite">Připojuji hru…</p>
+            <div class="text-center mb-2">
+                <span id="my-player-name" class="badge badge-success mr-2"></span>
+                <span id="opponent-player-name" class="badge badge-secondary"></span>
+            </div>
+            <div id="winner-banner" class="az-winner-banner" role="status" aria-live="assertive" hidden></div>
+            <dialog id="reaction-modal" class="az-reaction-modal" aria-labelledby="reaction-title">
+                <section id="reaction-panel" class="az-reaction-panel mb-0" aria-live="polite">
+                    <h2 id="reaction-title" class="h5">Souboj o šedé pole</h2>
+                    <p id="reaction-status">Sleduj obrazce. Mezerník stiskni, až budou stejné.</p>
+                    <div class="az-shape-pair" aria-label="Měnící se obrazce">
+                        <span id="shape-left">●</span>
+                        <span id="shape-right">▲</span>
+                    </div>
+                    <p id="reaction-hint" class="small mb-0">Kdo správně zareaguje rychleji, získá pole. Předčasný stisk znamená prohru.</p>
+                </section>
+            </dialog>
+            <div id="game-board" class="az-board" aria-label="Herní deska"></div>
+            <p id="feedback" class="mt-3 mb-0" role="status" aria-live="polite"></p>
+            <button id="cancel-game" class="btn btn-outline-secondary btn-sm mt-3" type="button" hidden>Zrušit hledání</button>
+        </div>
+    </section>
+
+    <dialog id="question-modal" class="az-question-modal" aria-labelledby="question-text">
+        <div class="az-question-modal-content">
+            <h2 id="question-text" class="h5"></h2>
+            <div id="answer-options" class="mb-3"></div>
+            <p id="answer-result" class="az-answer-result" role="status" aria-live="assertive" hidden></p>
+            <p id="cell-hint" class="small text-muted">Vybrané pole obsadíš při správné odpovědi.</p>
+            <div class="d-flex justify-content-between">
+                <button id="close-question" class="btn btn-outline-secondary" type="button">Zavřít</button>
+                <button id="submit-answer" class="btn btn-success" type="button">Odpovědět</button>
+            </div>
+        </div>
+    </dialog>
+
+    {% if opponents %}
+    <section class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Výsledky proti soupeřům</h2>
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-0">
+                    <thead><tr><th>Soupeř</th><th>Výhry</th><th>Prohry</th><th>Remízy</th></tr></thead>
+                    <tbody>
+                    {% for opponent in opponents %}
+                        <tr><td>{{ opponent.name }}</td><td>{{ opponent.wins }}</td><td>{{ opponent.losses }}</td><td>{{ opponent.draws }}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if history %}
+    <section class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Poslední hry</h2>
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-0">
+                    <thead><tr><th>Soupeř</th><th>Výsledek</th><th>Čas</th></tr></thead>
+                    <tbody>
+                    {% for game in history %}
+                        <tr>
+                            <td>{{ game.opponent_name }}</td>
+                            <td>{% if game.result == "win" %}Výhra{% elif game.result == "loss" %}Prohra{% else %}Remíza{% endif %}</td>
+                            <td>{{ game.played_at | format_datetime }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+</main>
+
+<script>
+(function () {
+    const startButton = document.getElementById("start-game");
+    const gamePanel = document.getElementById("game-panel");
+    const statusText = document.getElementById("game-status");
+    const opponentText = document.getElementById("opponent-name");
+    const myPlayerName = document.getElementById("my-player-name");
+    const opponentPlayerName = document.getElementById("opponent-player-name");
+    const boardElement = document.getElementById("game-board");
+    const winnerBanner = document.getElementById("winner-banner");
+    const reactionModal = document.getElementById("reaction-modal");
+    const reactionStatus = document.getElementById("reaction-status");
+    const shapeLeft = document.getElementById("shape-left");
+    const shapeRight = document.getElementById("shape-right");
+    const questionModal = document.getElementById("question-modal");
+    const questionText = document.getElementById("question-text");
+    const answerOptions = document.getElementById("answer-options");
+    const feedback = document.getElementById("feedback");
+    const cancelButton = document.getElementById("cancel-game");
+    let gameId = null;
+    let selectedCell = null;
+    let shownQuestion = null;
+    let currentGame = null;
+    let pollTimer = null;
+    let polling = false;
+    let answerSubmitting = false;
+    let answerResultVisible = false;
+    let audioContext = null;
+    let challengeRenderTimer = null;
+    let reacting = false;
+    let shownChallengeFrame = -1;
+
+    function prepareAudio() {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        if (!audioContext) audioContext = new AudioContext();
+        if (audioContext.state === "suspended") {
+            audioContext.resume().catch(function (error) {
+                console.warn("Zvuk se nepodařilo spustit.", error);
+            });
+        }
+    }
+
+    function playCorrectSound() {
+        if (!audioContext) return;
+        try {
+            const oscillator = audioContext.createOscillator();
+            const volume = audioContext.createGain();
+            const now = audioContext.currentTime;
+            oscillator.type = "sine";
+            oscillator.frequency.setValueAtTime(660, now);
+            oscillator.frequency.setValueAtTime(880, now + 0.12);
+            volume.gain.setValueAtTime(0.0001, now);
+            volume.gain.exponentialRampToValueAtTime(0.22, now + 0.025);
+            volume.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
+            oscillator.connect(volume);
+            volume.connect(audioContext.destination);
+            oscillator.start(now);
+            oscillator.stop(now + 0.4);
+        } catch (error) {
+            console.warn("Zvuk správné odpovědi se nepodařilo přehrát.", error);
+        }
+    }
+
+    function playWrongSound() {
+        if (!audioContext) return;
+        try {
+            const oscillator = audioContext.createOscillator();
+            const volume = audioContext.createGain();
+            const now = audioContext.currentTime;
+            oscillator.type = "triangle";
+            oscillator.frequency.setValueAtTime(260, now);
+            oscillator.frequency.exponentialRampToValueAtTime(130, now + 0.22);
+            volume.gain.setValueAtTime(0.0001, now);
+            volume.gain.exponentialRampToValueAtTime(0.2, now + 0.025);
+            volume.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+            oscillator.connect(volume);
+            volume.connect(audioContext.destination);
+            oscillator.start(now);
+            oscillator.stop(now + 0.32);
+        } catch (error) {
+            console.warn("Zvuk nesprávné odpovědi se nepodařilo přehrát.", error);
+        }
+    }
+
+    function waitForQuestionClose(delay) {
+        return new Promise(function (resolve) {
+            let timeoutId;
+            function finish() {
+                clearTimeout(timeoutId);
+                questionModal.removeEventListener("close", finish);
+                resolve();
+            }
+
+            questionModal.addEventListener("close", finish);
+            timeoutId = setTimeout(function () {
+                if (questionModal.open) questionModal.close();
+                finish();
+            }, delay);
+        });
+    }
+
+    async function send(url, method, body) {
+        const response = await fetch(url, {
+            method: method,
+            headers: body ? {"Content-Type": "application/json"} : {},
+            body: body ? JSON.stringify(body) : undefined,
+            credentials: "same-origin"
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Požadavek se nepodařilo dokončit.");
+        return data;
+    }
+
+    function drawBoard(game) {
+        boardElement.replaceChildren();
+        let index = 0;
+        for (let rowIndex = 0; rowIndex < game.board_size; rowIndex += 1) {
+            const row = document.createElement("div");
+            row.className = "az-row";
+            const rowLength = rowIndex + 1;
+            for (let column = 0; column < rowLength; column += 1) {
+                const cellIndex = index;
+                const owner = game.board[cellIndex];
+                const neutral = owner === "X";
+                const cell = document.createElement("button");
+                cell.type = "button";
+                cell.className = "az-cell" + (owner ? " owner-" + owner.toLowerCase() : "");
+                if (
+                    (!owner && game.my_turn)
+                    || (neutral && game.status === "playing")
+                ) {
+                    if (!game.challenge) cell.classList.add("available");
+                }
+                if (selectedCell === cellIndex) cell.classList.add("selected");
+                cell.textContent = neutral ? "?" : owner || String(cellIndex + 1);
+                cell.setAttribute(
+                    "aria-label",
+                    neutral ? "Šedé neutrální pole " + (cellIndex + 1)
+                        : owner ? "Pole " + (cellIndex + 1) + ", hráč " + owner
+                            : "Volné pole " + (cellIndex + 1)
+                );
+                cell.disabled = (
+                    (!neutral && (Boolean(owner) || !game.my_turn))
+                    || (neutral && game.status !== "playing")
+                    || Boolean(game.challenge)
+                );
+                cell.addEventListener("click", function () {
+                    if (neutral) {
+                        startGrayChallenge(cellIndex);
+                        return;
+                    }
+                    selectedCell = cellIndex;
+                    drawBoard(currentGame);
+                    if (currentGame.question && !questionModal.open) {
+                        questionModal.showModal();
+                        answerOptions.querySelectorAll('input[name="az-answer"]').forEach(function (input) {
+                            input.checked = false;
+                        });
+                        const answerResult = document.getElementById("answer-result");
+                        answerResult.hidden = true;
+                        answerResult.textContent = "";
+                        answerResult.className = "az-answer-result";
+                        answerOptions.hidden = false;
+                        document.getElementById("cell-hint").hidden = false;
+                        answerOptions.querySelector('input[name="az-answer"]').focus();
+                    }
+                });
+                row.appendChild(cell);
+                index += 1;
+            }
+            boardElement.appendChild(row);
+        }
+    }
+
+    function render(game) {
+        gameId = game.id;
+        currentGame = game;
+        if (!game.my_turn) selectedCell = null;
+        gamePanel.hidden = false;
+        opponentText.textContent = game.opponent_name ? "— " + game.opponent_name : "";
+        myPlayerName.textContent = "Ty: " + game.my_name;
+        myPlayerName.className = "badge mr-2 " + (game.my_color === "A" ? "badge-danger" : "badge-primary");
+        opponentPlayerName.textContent = game.opponent_name ? "Soupeř: " + game.opponent_name : "Čekám na soupeře";
+        opponentPlayerName.className = "badge " + (game.my_color === "A" ? "badge-primary" : "badge-danger");
+        drawBoard(game);
+        if (game.challenge) {
+            if (!reactionModal.open) reactionModal.showModal();
+            const reactions = [];
+            if (game.challenge.my_reacted) reactions.push("Tvůj čas je zaznamenán.");
+            if (game.challenge.opponent_reacted) reactions.push("Soupeřův čas je zaznamenán.");
+            reactionStatus.textContent = reactions.length
+                ? reactions.join(" ") + " Čekáme na výsledek."
+                : "Sleduj obrazce. Mezerník stiskni, až budou stejné.";
+        } else {
+            if (reactionModal.open) reactionModal.close();
+            shownChallengeFrame = -1;
+        }
+        cancelButton.hidden = game.status !== "waiting";
+        if ((!game.my_turn || game.status !== "playing" || game.challenge) && questionModal.open) {
+            questionModal.close();
+        }
+        if (game.status === "waiting") {
+            statusText.textContent = "Hledám soupeře… Tato stránka bude průběžně kontrolovat, jestli se někdo připojil.";
+        } else if (game.challenge) {
+            statusText.textContent = "Souboj o šedé pole! Když se obrazce shodují, stiskni mezerník.";
+        } else if (game.status === "playing" && game.my_turn) {
+            statusText.textContent = "Jsi na tahu. Vyber volné pole a odpověz na otázku.";
+        } else if (game.status === "playing") {
+            statusText.textContent = "Na tahu je " + game.opponent_name + ". Čekám na odpověď…";
+        } else if (game.winner === "you") {
+            statusText.textContent = "Vyhrál/a jsi! Výsledek se uložil.";
+        } else if (game.winner === "opponent") {
+            statusText.textContent = "Tentokrát vyhrál soupeř. Výsledek se uložil.";
+        } else if (game.winner === "draw") {
+            statusText.textContent = "Hra skončila remízou.";
+        } else if (game.status === "abandoned") {
+            statusText.textContent = "Hra vypršela. Můžeš začít novou.";
+        } else {
+            statusText.textContent = "Hra byla ukončena.";
+        }
+        winnerBanner.hidden = game.status !== "finished";
+        if (game.status === "finished") {
+            winnerBanner.className = "az-winner-banner" + (game.winner === "opponent" ? " opponent" : "");
+            winnerBanner.textContent = game.winner === "draw"
+                ? "REMÍZA"
+                : "🏆 VYHRÁL/A " + (game.winner_name || "hráč") + "!";
+        }
+        updatePollRate(game.challenge ? 100 : game.status === "playing" ? 250 : 2000);
+        if (game.challenge && !challengeRenderTimer) {
+            challengeRenderTimer = setInterval(renderChallengeFrame, 50);
+        } else if (!game.challenge && challengeRenderTimer) {
+            clearInterval(challengeRenderTimer);
+            challengeRenderTimer = null;
+        }
+
+        if (game.question) {
+            const questionKey = game.question.text;
+            if (shownQuestion !== questionKey) {
+                shownQuestion = questionKey;
+                questionText.textContent = game.question.text;
+                answerOptions.replaceChildren();
+                game.question.options.forEach(function (option, index) {
+                    const label = document.createElement("label");
+                    label.className = "d-block";
+                    const input = document.createElement("input");
+                    input.type = "radio";
+                    input.name = "az-answer";
+                    input.value = String(index);
+                    input.className = "mr-2";
+                    label.appendChild(input);
+                    label.appendChild(document.createTextNode(option));
+                    answerOptions.appendChild(label);
+                });
+            }
+        } else {
+            shownQuestion = null;
+        }
+        if (["finished", "abandoned", "cancelled"].includes(game.status)) {
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = null;
+            startButton.textContent = "Zahrát znovu";
+        }
+    }
+
+    function renderChallengeFrame() {
+        const challenge = currentGame && currentGame.challenge;
+        if (!challenge) return;
+        const elapsed = Date.now() - challenge.started_at;
+        const frameIndex = Math.max(
+            0,
+            Math.min(challenge.frames.length - 1, Math.floor(elapsed / challenge.interval_ms))
+        );
+        if (frameIndex === shownChallengeFrame) return;
+        shownChallengeFrame = frameIndex;
+        shapeLeft.textContent = challenge.frames[frameIndex][0];
+        shapeRight.textContent = challenge.frames[frameIndex][1];
+    }
+
+    async function startGrayChallenge(cell) {
+        if (
+            !gameId
+            || !currentGame
+            || currentGame.status !== "playing"
+            || currentGame.challenge
+        ) return;
+        feedback.textContent = "";
+        try {
+            render(await send(
+                "{{ url_for('python.azkviz_start_challenge', game_id=0) }}".replace("/0/challenge", "/" + gameId + "/challenge"),
+                "POST",
+                {cell: cell}
+            ));
+        } catch (error) {
+            feedback.textContent = error.message;
+            await poll();
+        }
+    }
+
+    function updatePollRate(interval) {
+        if (!pollTimer) return;
+        clearInterval(pollTimer);
+        pollTimer = setInterval(poll, interval);
+    }
+
+    async function poll() {
+        if (!gameId || polling || answerSubmitting) return;
+        polling = true;
+        try {
+            const game = await send("{{ url_for('python.azkviz_game_state', game_id=0) }}".replace("/0", "/" + gameId), "GET");
+            if (game.feedback) feedback.textContent = game.feedback;
+            render(game);
+        } catch (error) {
+            statusText.textContent = error.message;
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = null;
+        } finally {
+            polling = false;
+        }
+    }
+
+    startButton.addEventListener("click", async function () {
+        startButton.disabled = true;
+        feedback.textContent = "";
+        selectedCell = null;
+        try {
+            const game = await send("{{ url_for('python.azkviz_match') }}", "POST");
+            render(game);
+            if (!pollTimer) {
+                pollTimer = setInterval(
+                    poll,
+                    game.challenge ? 100 : game.status === "playing" ? 250 : 2000
+                );
+            }
+        } catch (error) {
+            gamePanel.hidden = false;
+            statusText.textContent = error.message;
+        } finally {
+            startButton.disabled = false;
+        }
+    });
+
+    document.getElementById("close-question").addEventListener("click", function () {
+        questionModal.close();
+    });
+    questionModal.addEventListener("close", function () {
+        selectedCell = null;
+        if (currentGame) drawBoard(currentGame);
+    });
+    questionModal.addEventListener("cancel", function (event) {
+        if (answerSubmitting && !answerResultVisible) event.preventDefault();
+    });
+    reactionModal.addEventListener("cancel", function (event) {
+        if (currentGame && currentGame.challenge) event.preventDefault();
+    });
+
+    document.addEventListener("keydown", async function (event) {
+        if (
+            event.code !== "Space"
+            || !currentGame
+            || !currentGame.challenge
+            || reacting
+            || currentGame.challenge.my_reacted
+            || event.repeat
+        ) return;
+        event.preventDefault();
+        reacting = true;
+        prepareAudio();
+        try {
+            const result = await send(
+                "{{ url_for('python.azkviz_challenge_react', game_id=0) }}".replace("/0/challenge/react", "/" + gameId + "/challenge/react"),
+                "POST"
+            );
+            feedback.textContent = result.feedback;
+            render(result.game);
+            if (!result.correct) playWrongSound();
+        } catch (error) {
+            feedback.textContent = error.message;
+        } finally {
+            reacting = false;
+        }
+    });
+
+    document.getElementById("submit-answer").addEventListener("click", async function () {
+        const selectedAnswer = answerOptions.querySelector('input[name="az-answer"]:checked');
+        if (!selectedAnswer) {
+            document.getElementById("cell-hint").textContent = "Nejdřív vyber odpověď.";
+            return;
+        }
+        document.getElementById("cell-hint").textContent = "Vybrané pole obsadíš při správné odpovědi.";
+        const submitButton = document.getElementById("submit-answer");
+        const answerResult = document.getElementById("answer-result");
+        submitButton.disabled = true;
+        answerSubmitting = true;
+        answerResultVisible = false;
+        prepareAudio();
+        feedback.textContent = "";
+        try {
+            const result = await send(
+                "{{ url_for('python.azkviz_answer', game_id=0) }}".replace("/0/answer", "/" + gameId + "/answer"),
+                "POST",
+                {answer: Number(selectedAnswer.value), cell: selectedCell}
+            );
+            answerResult.textContent = result.feedback;
+            answerResult.className = result.correct
+                ? "az-answer-result alert alert-success"
+                : "az-answer-result alert alert-danger";
+            answerResult.hidden = false;
+            answerOptions.hidden = true;
+            document.getElementById("cell-hint").hidden = true;
+            submitButton.hidden = true;
+            answerResultVisible = true;
+            currentGame = result.game;
+            if (result.correct) playCorrectSound();
+            else playWrongSound();
+
+            await waitForQuestionClose(3000);
+            render(result.game);
+        } catch (error) {
+            document.getElementById("cell-hint").textContent = error.message;
+            await poll();
+        } finally {
+            submitButton.hidden = false;
+            submitButton.disabled = false;
+            answerSubmitting = false;
+            answerResultVisible = false;
+        }
+    });
+
+    cancelButton.addEventListener("click", async function () {
+        if (!gameId) return;
+        try {
+            await send(
+                "{{ url_for('python.azkviz_cancel', game_id=0) }}".replace("/0/cancel", "/" + gameId + "/cancel"),
+                "POST"
+            );
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = null;
+            gamePanel.hidden = true;
+            startButton.textContent = "Najít soupeře";
+        } catch (error) {
+            statusText.textContent = error.message;
+            await poll();
+        }
+    });
+})();
+</script>
+</body>
+</html>

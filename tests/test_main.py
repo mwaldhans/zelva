@@ -1,9 +1,11 @@
-from pathlib import Path
+from io import BytesIO
 import json
 import sqlite3
 import urllib.error
+from pathlib import Path
 
 from zelva.app import _is_allowed_login_email, create_app
+from zelva.python_course import AZ_BOARD_SIZE, _az_connected, _az_question_payload, init_db
 
 
 def test_login_email_accepts_root_and_subdomains() -> None:
@@ -11,7 +13,11 @@ def test_login_email_accepts_root_and_subdomains() -> None:
     assert _is_allowed_login_email("student@class.gymnzidlo.cz")
     assert _is_allowed_login_email("student@a.class.gymnzidlo.cz")
     assert _is_allowed_login_email("student@one.two.three.gymnzidlo.cz")
+    assert _is_allowed_login_email("student@gymkren.cz")
+    assert _is_allowed_login_email("student@class.gymkren.cz")
+    assert _is_allowed_login_email("student@CLASS.GYMKREN.CZ")
     assert not _is_allowed_login_email("student@gymnzidlo.cz.evil.test")
+    assert not _is_allowed_login_email("student@gymkren.cz.evil.test")
     assert not _is_allowed_login_email("student@other.cz")
     assert not _is_allowed_login_email("student@one..gymnzidlo.cz")
 
@@ -23,6 +29,97 @@ def test_home_page_is_available() -> None:
 
     assert response.status_code == 302
     assert response.location.startswith("/login")
+
+
+def test_azkviz_question_answer_options_are_shuffled_together(monkeypatch) -> None:
+    def reverse_choices(choices):
+        choices.reverse()
+
+    monkeypatch.setattr("zelva.python_course.random.shuffle", reverse_choices)
+    question = _az_question_payload({
+        "id": 5,
+        "question": "Která odpověď je správně?",
+        "options": json.dumps(["špatně 1", "správně", "špatně 2"]),
+        "answer": 1,
+    })
+
+    assert question["options"] == ["špatně 2", "správně", "špatně 1"]
+    assert question["options"][question["answer"]] == "správně"
+
+
+def test_hub_shows_azkviz_as_third_main_section(tmp_path: Path) -> None:
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(tmp_path / "python.db"),
+    })
+    client = app.test_client()
+    with client.session_transaction() as session:
+        session["user"] = {
+            "sub": "student@gymnzidlo.cz",
+            "email": "student@gymnzidlo.cz",
+            "name": "Student",
+        }
+
+    response = client.get("/")
+    html = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert html.index("<h2>Želva</h2>") < html.index("<h2>Programování v Pythonu</h2>")
+    assert html.index("<h2>Programování v Pythonu</h2>") < html.index("<h2>AZ kvíz</h2>")
+    assert "/python/azkviz" in html
+
+
+def test_teacher_can_play_azkviz_against_student(tmp_path: Path) -> None:
+    python_db = tmp_path / "python.db"
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(python_db),
+    })
+    teacher = app.test_client()
+    student = app.test_client()
+
+    with teacher.session_transaction() as session:
+        email = app.config["ADMIN_EMAIL"]
+        session["user"] = {"sub": email, "email": email, "name": "Učitel"}
+    with student.session_transaction() as session:
+        session["user"] = {
+            "sub": "student@gymnzidlo.cz",
+            "email": "student@gymnzidlo.cz",
+            "name": "Student",
+        }
+
+    page = teacher.get("/python/azkviz")
+    assert page.status_code == 200
+    page_html = page.get_data(as_text=True)
+    assert "AZ kvíz" in page_html
+    assert '<dialog id="question-modal"' in page_html
+    assert '<dialog id="reaction-modal"' in page_html
+    assert "reactionModal.showModal()" in page_html
+    assert 'id="winner-banner"' in page_html
+    assert "game.winner_name" in page_html
+    assert "questionModal.showModal()" in page_html
+    assert "questionModal.close()" in page_html
+    assert 'id="answer-result"' in page_html
+    assert "playCorrectSound()" in page_html
+    assert "playWrongSound()" in page_html
+    assert '"az-answer-result alert alert-danger"' in page_html
+    assert "waitForQuestionClose(3000)" in page_html
+
+    waiting = teacher.post("/python/azkviz/match")
+    assert waiting.status_code == 200
+    assert waiting.json["status"] == "waiting"
+    paired = student.post("/python/azkviz/match")
+    assert paired.status_code == 200
+    assert paired.json["id"] == waiting.json["id"]
+    assert paired.json["status"] == "playing"
+
+    with sqlite3.connect(python_db) as conn:
+        teacher_student_record = conn.execute(
+            "SELECT COUNT(*) FROM students WHERE email = ?",
+            (app.config["ADMIN_EMAIL"],),
+        ).fetchone()[0]
+    assert teacher_student_record == 0
 
 
 def test_health_api_is_available() -> None:
@@ -171,11 +268,648 @@ def test_python_dashboard_marks_successful_assignments(tmp_path: Path) -> None:
     response = client.get("/python/student")
     html = response.get_data(as_text=True)
     assert response.status_code == 200
-    assert "card assignment-card status-success" in html
+    assert 'class="chip status-success"' in html
     assert "Hotový úkol" in html
+    assert "AZkvíz" not in html
 
     theme = client.get("/static/python-theme.css").get_data(as_text=True)
     assert ".python-course .card.status-success" in theme
+
+
+def test_azkviz_matches_players_and_records_winner_stats(tmp_path: Path) -> None:
+    python_db = tmp_path / "python.db"
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(python_db),
+    })
+    player_a = app.test_client()
+    player_b = app.test_client()
+
+    for client, email, name in (
+        (player_a, "a@gymnzidlo.cz", "Alice"),
+        (player_b, "b@gymnzidlo.cz", "Bob"),
+    ):
+        with client.session_transaction() as session:
+            session["user"] = {"sub": email, "email": email, "name": name}
+
+    waiting = player_a.post("/python/azkviz/match")
+    assert waiting.status_code == 200
+    assert waiting.json["status"] == "waiting"
+    assert waiting.json["board_size"] == AZ_BOARD_SIZE == 4
+    assert len(waiting.json["board"]) == 10
+    game_id = waiting.json["id"]
+
+    matched = player_b.post("/python/azkviz/match")
+    assert matched.status_code == 200
+    assert matched.json["id"] == game_id
+    assert matched.json["status"] == "playing"
+    assert not matched.json["my_turn"]
+    assert matched.json["question"] is None
+    assert matched.json["my_name"] == "Bob"
+    assert matched.json["opponent_name"] == "Alice"
+    player_a_state = player_a.get(f"/python/azkviz/game/{game_id}").json
+    assert player_a_state["my_name"] == "Alice"
+    assert player_a_state["opponent_name"] == "Bob"
+
+    outsider = app.test_client()
+    with outsider.session_transaction() as session:
+        session["user"] = {
+            "sub": "outsider@gymnzidlo.cz",
+            "email": "outsider@gymnzidlo.cz",
+            "name": "Outsider",
+        }
+    assert outsider.get(f"/python/azkviz/game/{game_id}").status_code == 403
+
+    def question_answer(client):
+        state = client.get(f"/python/azkviz/game/{game_id}").json
+        assert state["my_turn"]
+        conn = sqlite3.connect(python_db)
+        question_payload = conn.execute(
+            "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
+        ).fetchone()[0]
+        conn.close()
+        assert question_payload
+        return state, json.loads(question_payload)["answer"]
+
+    state, correct_answer = question_answer(player_a)
+    assert state["question"] is not None
+    no_cell = player_a.post(
+        f"/python/azkviz/game/{game_id}/answer",
+        json={"answer": correct_answer},
+    )
+    assert no_cell.status_code == 400
+    assert player_a.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+
+    wrong = (correct_answer + 1) % len(state["question"]["options"])
+    result = player_a.post(
+        f"/python/azkviz/game/{game_id}/answer",
+        json={"answer": wrong, "cell": 9},
+    )
+    assert result.status_code == 200
+    assert result.json["correct"] is False
+    assert result.json["game"]["board"] == [None] * 9 + ["X"]
+    assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+
+    assert not _az_connected(
+        [None, "a@gymnzidlo.cz", None, None, "a@gymnzidlo.cz",
+         None, None, None, "a@gymnzidlo.cz", None],
+        "a@gymnzidlo.cz",
+    )
+
+    for move_index, (cell, gray_cell) in enumerate(zip((0, 1, 3, 6), (8, 7, 2, 5))):
+        state_b, answer_b = question_answer(player_b)
+        wrong_b = (answer_b + 1) % len(state_b["question"]["options"])
+        wrong_result = player_b.post(
+            f"/python/azkviz/game/{game_id}/answer",
+            json={"answer": wrong_b, "cell": gray_cell},
+        )
+        assert wrong_result.status_code == 200
+        assert wrong_result.json["game"]["board"][gray_cell] == "X"
+
+        _, answer_a = question_answer(player_a)
+        result_a = player_a.post(
+            f"/python/azkviz/game/{game_id}/answer",
+            json={"answer": answer_a, "cell": cell},
+        )
+        assert result_a.status_code == 200
+        assert result_a.json["correct"] is True
+        assert result_a.json["game"]["board"][cell] == "A"
+        if move_index < 3:
+            assert result_a.json["game"]["status"] == "playing"
+        else:
+            assert result_a.json["game"]["status"] == "finished"
+            assert result_a.json["game"]["winner"] == "you"
+            assert result_a.json["game"]["winner_name"] == "Alice"
+
+    with sqlite3.connect(python_db) as conn:
+        stored = conn.execute(
+            "SELECT status, winner_email FROM az_games WHERE id = ?", (game_id,)
+        ).fetchone()
+    assert stored == ("finished", "a@gymnzidlo.cz")
+
+    stats_a = player_a.get("/python/azkviz")
+    assert stats_a.status_code == 200
+    assert "výher" in stats_a.get_data(as_text=True)
+    assert "Bob" in stats_a.get_data(as_text=True)
+    stats_b = player_b.get("/python/azkviz").get_data(as_text=True)
+    assert "Prohra" in stats_b
+    assert "Alice" in stats_b
+    lost_game = player_b.get(f"/python/azkviz/game/{game_id}").json
+    assert lost_game["winner"] == "opponent"
+    assert lost_game["winner_name"] == "Alice"
+
+
+def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
+    python_db = tmp_path / "p.db"
+    app = _python_app(tmp_path)
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+
+    game = player_a.post("/python/azkviz/match").json
+    game_id = game["id"]
+    assert player_b.post("/python/azkviz/match").json["status"] == "playing"
+
+    state_a = player_a.get(f"/python/azkviz/game/{game_id}").json
+    with sqlite3.connect(python_db) as conn:
+        question = json.loads(
+            conn.execute(
+                "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
+            ).fetchone()[0]
+        )
+    failed = player_a.post(
+        f"/python/azkviz/game/{game_id}/answer",
+        json={"answer": (question["answer"] + 1) % len(question["options"]), "cell": 0},
+    )
+    assert failed.status_code == 200
+    assert failed.json["game"]["board"][0] == "X"
+    assert state_a["my_turn"]
+    assert not player_a.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+    assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+
+    # Either participant can start the shared challenge, even when it is not their turn.
+    challenge = player_a.post(
+        f"/python/azkviz/game/{game_id}/challenge", json={"cell": 0}
+    )
+    assert challenge.status_code == 200
+    assert challenge.json["challenge"]["cell"] == 0
+    assert challenge.json["question"] is None
+    assert player_a.get(f"/python/azkviz/game/{game_id}").json["challenge"] is not None
+    assert player_b.get(f"/python/azkviz/game/{game_id}").json["challenge"] is not None
+    with sqlite3.connect(python_db) as conn:
+        during_challenge_question = json.loads(
+            conn.execute(
+                "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
+            ).fetchone()[0]
+        )
+    bypass = player_b.post(
+        f"/python/azkviz/game/{game_id}/answer",
+        json={"answer": during_challenge_question["answer"], "cell": 2},
+    )
+    assert bypass.status_code == 409
+    assert player_a.get(f"/python/azkviz/game/{game_id}").json["challenge"]["frames"] == (
+        challenge.json["challenge"]["frames"]
+    )
+
+    with sqlite3.connect(python_db) as conn:
+        conn.execute(
+            "UPDATE az_games SET challenge_started_at = ? WHERE id = ?",
+            (
+                challenge.json["challenge"]["started_at"]
+                - challenge.json["challenge"]["target_ms"]
+                - 100,
+                game_id,
+            ),
+        )
+    reaction_b = player_b.post(f"/python/azkviz/game/{game_id}/challenge/react")
+    reaction_a = player_a.post(f"/python/azkviz/game/{game_id}/challenge/react")
+    assert reaction_b.status_code == reaction_a.status_code == 200
+    assert reaction_b.json["correct"] is True
+    assert reaction_a.json["correct"] is True
+    assert reaction_a.json["game"]["board"][0] == "B"
+    assert reaction_a.json["game"]["challenge"] is None
+
+    # The next player creates another gray cell and loses immediately on an early key press.
+    with sqlite3.connect(python_db) as conn:
+        current = json.loads(
+            conn.execute(
+                "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
+            ).fetchone()[0]
+        )
+    missed = player_a.post(
+        f"/python/azkviz/game/{game_id}/answer",
+        json={"answer": (current["answer"] + 1) % len(current["options"]), "cell": 1},
+    )
+    assert missed.status_code == 200
+    assert missed.json["game"]["board"][1] == "X"
+    early_challenge = player_a.post(
+        f"/python/azkviz/game/{game_id}/challenge", json={"cell": 1}
+    )
+    assert early_challenge.status_code == 200
+    early = player_a.post(f"/python/azkviz/game/{game_id}/challenge/react")
+    assert early.status_code == 200
+    assert early.json["correct"] is False
+    assert early.json["game"]["status"] == "finished"
+    assert early.json["game"]["winner"] == "opponent"
+    assert early.json["game"]["winner_name"] == "Test"
+
+
+def test_azkviz_reaction_winner_only_claims_cell(tmp_path: Path) -> None:
+    python_db = tmp_path / "p.db"
+    app = _python_app(tmp_path)
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+
+    waiting = player_a.post("/python/azkviz/match").json
+    player_b.post("/python/azkviz/match")
+    game_id = waiting["id"]
+
+    board = ["X"] + ["a@gymnzidlo.cz"] * 8 + [None]
+    with sqlite3.connect(python_db) as conn:
+        conn.execute(
+            """
+            UPDATE az_games
+            SET board = ?, challenge_cell = 0, challenge_started_at = ?,
+                challenge_target_ms = 100, challenge_frames = '[]',
+                challenge_reactions = ?, challenge_active = 1
+            WHERE id = ?
+            """,
+            (
+                json.dumps(board),
+                0,
+                json.dumps({"a@gymnzidlo.cz": 20}),
+                game_id,
+            ),
+        )
+
+    finished = player_a.get(f"/python/azkviz/game/{game_id}")
+    assert finished.status_code == 200
+    assert finished.json["board"] == ["A"] * 9 + [None]
+    assert finished.json["status"] == "playing"
+    assert finished.json["winner"] is None
+    assert finished.json["my_turn"] is False
+    assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+
+
+def test_azkviz_abandons_active_games_with_old_board_shape(tmp_path: Path) -> None:
+    python_db = tmp_path / "python.db"
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(python_db),
+    })
+    with sqlite3.connect(python_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO az_games
+                (player_a_email, player_a_name, player_b_email, player_b_name,
+                 status, turn_email, board, question_index)
+            VALUES (?, ?, ?, ?, 'playing', ?, ?, ?)
+            """,
+            (
+                "a@gymnzidlo.cz", "Alice", "b@gymnzidlo.cz", "Bob",
+                "a@gymnzidlo.cz", json.dumps([None] * 9), 0,
+            ),
+        )
+
+    init_db(str(python_db))
+
+    with sqlite3.connect(python_db) as conn:
+        status = conn.execute(
+            "SELECT status FROM az_games WHERE player_a_email = ?",
+            ("a@gymnzidlo.cz",),
+        ).fetchone()[0]
+    assert status == "abandoned"
+
+
+def test_admin_can_manage_azkviz_questions_and_inflight_question_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    python_db = tmp_path / "python.db"
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(python_db),
+    })
+    app.config["PYTHON_TEACHER_EMAILS"] = ["teacher@gymnzidlo.cz"]
+    admin = app.test_client()
+    player_a = app.test_client()
+    player_b = app.test_client()
+    teacher = app.test_client()
+
+    with admin.session_transaction() as session:
+        email = app.config["ADMIN_EMAIL"]
+        session["user"] = {"sub": email, "email": email, "name": "Admin"}
+    for client, email, name in (
+        (player_a, "a@gymnzidlo.cz", "Alice"),
+        (player_b, "b@gymnzidlo.cz", "Bob"),
+    ):
+        with client.session_transaction() as session:
+            session["user"] = {"sub": email, "email": email, "name": name}
+    with teacher.session_transaction() as session:
+        session["user"] = {
+            "sub": "teacher@gymnzidlo.cz",
+            "email": "teacher@gymnzidlo.cz",
+            "name": "Teacher",
+        }
+
+    editor_url = "/python/admin/azkviz/questions"
+    assert admin.get(editor_url).status_code == 200
+    assert teacher.get(editor_url).status_code == 302
+    assert player_a.get(editor_url).status_code == 302
+
+    created = admin.post(editor_url, data={
+        "action": "create",
+        "question": "Kolik je 2 + 2?",
+        "options": "3\n4\n5",
+        "answer": "1",
+        "active": "1",
+    })
+    assert created.status_code == 302
+    with sqlite3.connect(python_db) as conn:
+        question_id = conn.execute(
+            "SELECT id FROM az_questions WHERE question = ?",
+            ("Kolik je 2 + 2?",),
+        ).fetchone()[0]
+        defaults = conn.execute(
+            "SELECT id, question, options, answer FROM az_questions WHERE id <> ?",
+            (question_id,),
+        ).fetchall()
+
+    for default_id, text, options_json, answer in defaults:
+        disabled = admin.post(editor_url, data={
+            "action": "update",
+            "question_id": str(default_id),
+            "question": text,
+            "options": "\n".join(json.loads(options_json)),
+            "answer": str(answer),
+        })
+        assert disabled.status_code == 302
+
+    # The selected question is stored in the game so edits do not change a live turn.
+    waiting = player_a.post("/python/azkviz/match")
+    paired = player_b.post("/python/azkviz/match")
+    assert paired.json["id"] == waiting.json["id"]
+    game_id = waiting.json["id"]
+    state = player_a.get(f"/python/azkviz/game/{game_id}").json
+    with sqlite3.connect(python_db) as conn:
+        current = json.loads(conn.execute(
+            "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
+        ).fetchone()[0])
+    assert current["id"] == question_id
+    original_text = current["question"]
+    edited = admin.post(editor_url, data={
+        "action": "update",
+        "question_id": str(question_id),
+        "question": "Změněná otázka?",
+        "options": "3\n4\n5",
+        "answer": "1",
+        "active": "1",
+    })
+    assert edited.status_code == 302
+    state = player_a.get(f"/python/azkviz/game/{game_id}").json
+    assert state["question"]["text"] == original_text
+
+    deactivate_last = admin.post(editor_url, data={
+        "action": "update",
+        "question_id": str(question_id),
+        "question": "Kolik je 2 + 2?",
+        "options": "3\n4\n5",
+        "answer": "1",
+    })
+    assert deactivate_last.status_code == 302
+    assert "Musí zůstat alespoň jedna aktivní otázka." in admin.get(editor_url).get_data(as_text=True)
+
+    invalid = admin.post(editor_url, data={
+        "action": "update",
+        "question_id": str(question_id),
+        "question": "Neplatná otázka?",
+        "options": "jen jedna",
+        "answer": "0",
+        "active": "1",
+    })
+    assert invalid.status_code == 302
+    with sqlite3.connect(python_db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM az_questions WHERE question = ?",
+            ("Neplatná otázka?",),
+        ).fetchone()[0] == 0
+
+
+def test_azkviz_question_export_import_merges_by_id(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    admin = app.test_client()
+    _login(admin, app.config["ADMIN_EMAIL"])
+    export_url = "/python/admin/azkviz/questions/export"
+    import_url = "/python/admin/azkviz/questions/import"
+
+    exported = admin.get(export_url)
+    assert exported.status_code == 200
+    payload = json.loads(exported.data)
+    assert payload["area"] == "azkviz"
+    assert payload["items"]
+    first_id = payload["items"][0]["id"]
+    payload["items"][0]["question"] = "Upravená exportovaná otázka?"
+    existing_ids = {item["id"] for item in payload["items"]}
+    added_id = max(existing_ids) + 100
+    payload["items"].append({
+        "id": added_id,
+        "question": "Nová importovaná otázka?",
+        "options": ["Ano", "Ne"],
+        "answer": 0,
+        "active": True,
+    })
+    response = admin.post(
+        import_url,
+        data={"file": (BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8")), "az.json")},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 302
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        questions = conn.execute(
+            "SELECT question FROM az_questions WHERE id IN (?, ?) ORDER BY id",
+            (first_id, added_id),
+        ).fetchall()
+    assert questions == [
+        ("Upravená exportovaná otázka?",),
+        ("Nová importovaná otázka?",),
+    ]
+
+    payload["area"] = "python"
+    wrong_area = admin.post(
+        import_url,
+        data={"file": (BytesIO(json.dumps(payload).encode("utf-8")), "python.json")},
+        content_type="multipart/form-data",
+    )
+    assert wrong_area.status_code == 302
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        assert conn.execute(
+            "SELECT question FROM az_questions WHERE id = ?", (first_id,)
+        ).fetchone()[0] == "Upravená exportovaná otázka?"
+
+
+def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(tmp_path: Path) -> None:
+    source_dir = tmp_path / "source"
+    target_dir = tmp_path / "target"
+    source_dir.mkdir()
+    target_dir.mkdir()
+    source_app = _python_app(source_dir)
+    target_app = _python_app(target_dir)
+    source_admin = source_app.test_client()
+    target_admin = target_app.test_client()
+    for client in (source_admin, target_admin):
+        _login(client, client.application.config["ADMIN_EMAIL"])
+
+    original_target = target_admin.get(
+        "/python/admin/azkviz/questions/export"
+    )
+    target_questions = json.loads(original_target.data)["items"]
+    target_admin.post(
+        "/python/admin/azkviz/questions",
+        data={
+            "action": "create",
+            "question": "Místní otázka se shodným číselným ID?",
+            "options": "A\nB",
+            "answer": "0",
+            "active": "1",
+        },
+    )
+    with sqlite3.connect(target_dir / "p.db") as conn:
+        target_collision = conn.execute(
+            "SELECT id, question FROM az_questions "
+            "WHERE question = ?",
+            ("Místní otázka se shodným číselným ID?",),
+        ).fetchone()
+
+    source_admin.post(
+        "/python/admin/azkviz/questions",
+        data={
+            "action": "create",
+            "question": "Cizí otázka z jiné databáze?",
+            "options": "První\nDruhá",
+            "answer": "1",
+            "active": "1",
+        },
+    )
+    source_export = source_admin.get("/python/admin/azkviz/questions/export")
+    payload = json.loads(source_export.data)
+    foreign_item = next(
+        item for item in payload["items"]
+        if item["question"] == "Cizí otázka z jiné databáze?"
+    )
+    assert foreign_item["id"] == target_collision[0]
+    upload = BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+    for _ in range(2):
+        response = target_admin.post(
+            "/python/admin/azkviz/questions/import",
+            data={"file": (BytesIO(upload.getvalue()), "foreign-azkviz.json")},
+            content_type="multipart/form-data",
+            follow_redirects=True,
+        )
+        assert response.status_code == 200
+        assert "Import otázek dokončen" in response.get_data(as_text=True)
+
+    target_database = target_dir / "p.db"
+    with sqlite3.connect(target_database) as conn:
+        count = conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0]
+        id_one_question = conn.execute(
+            "SELECT question FROM az_questions WHERE id = ?", (target_collision[0],)
+        ).fetchone()[0]
+        imported_count = conn.execute(
+            "SELECT COUNT(*) FROM az_questions WHERE question = ?",
+            ("Cizí otázka z jiné databáze?",),
+        ).fetchone()[0]
+    assert count == len(target_questions) + 2
+    assert id_one_question == target_collision[1]
+    assert imported_count == 1
+
+
+def test_turtle_content_export_import_merges_independently(tmp_path: Path) -> None:
+    app = create_app({
+        "TESTING": True,
+        "DATABASE": str(tmp_path / "zelva.db"),
+        "PYTHON_DATABASE": str(tmp_path / "python.db"),
+    })
+    admin = app.test_client()
+    _login(admin, app.config["ADMIN_EMAIL"])
+    created = admin.post("/api/custom-patterns", json={
+        "id": "new_turtle_pattern",
+        "name": "Původní vlastní vzor",
+        "category": "Testovací",
+        "commands": ["forward(10)"],
+    })
+    assert created.status_code == 201
+
+    exported = admin.get("/admin/content/turtle/export")
+    assert exported.status_code == 200
+    payload = json.loads(exported.data)
+    assert payload["area"] == "zelva"
+    payload["custom_patterns"]["new_turtle_pattern"]["name"] = "Aktualizovaný vlastní vzor"
+    payload["custom_patterns"]["another_turtle_pattern"] = {
+        "name": "Nový vlastní vzor",
+        "category": "Testovací",
+        "commands": ["left(90)"],
+        "initial_lines": 1,
+        "initial_text": "",
+        "hint": "",
+    }
+    payload["overrides"]["square"] = {
+        "name": "Upravený čtverec",
+        "commands": ["forward(20)"],
+    }
+    imported = admin.post(
+        "/admin/content/turtle/import",
+        data={"file": (BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8")), "zelva.json")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 302
+    content = admin.get("/api/pattern-overrides").json
+    assert content["custom_patterns"]["new_turtle_pattern"]["name"] == "Aktualizovaný vlastní vzor"
+    assert content["custom_patterns"]["another_turtle_pattern"]["name"] == "Nový vlastní vzor"
+    assert content["overrides"]["square"]["name"] == "Upravený čtverec"
+    assert content["overrides"]["square"]["commands"] == ["forward(20)"]
+
+
+def test_python_content_export_import_merges_assignments(tmp_path: Path) -> None:
+    python_db = tmp_path / "p.db"
+    app = _python_app(tmp_path)
+    teacher = app.test_client()
+    _login(teacher, app.config["ADMIN_EMAIL"])
+    with sqlite3.connect(python_db) as conn:
+        conn.execute(
+            """
+            INSERT INTO assignments (id, title, description, teacher_code, section)
+            VALUES (42, 'Původní úloha', 'Původní popis', 'def solve():\\n    return 1', 'Základy')
+            """
+        )
+        conn.execute(
+            "INSERT INTO assignments (id, title, teacher_code, section) VALUES (43, 'Zachovaná úloha', '', 'Další')"
+        )
+        conn.commit()
+
+    exported = teacher.get("/python/teacher/content/export")
+    assert exported.status_code == 200
+    payload = json.loads(exported.data)
+    assert payload["area"] == "python"
+    item = next(item for item in payload["items"] if item["id"] == 42)
+    item["title"] = "Aktualizovaná úloha"
+    payload["items"].append({
+        "id": 100,
+        "title": "Nová úloha",
+        "description": "Přidaná importem",
+        "teacher_code": "",
+        "section": "Import",
+        "display_order": 0,
+        "section_order": 0,
+        "help_text": "",
+        "test_input_run": None,
+        "test_input_submit": None,
+        "test_call_run": "",
+        "test_call_submit": "",
+        "precopy_lines": 1,
+        "active": True,
+        "required": False,
+    })
+    imported = teacher.post(
+        "/python/teacher/content/import",
+        data={"file": (BytesIO(json.dumps(payload, ensure_ascii=False).encode("utf-8")), "python.json")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 302
+    with sqlite3.connect(python_db) as conn:
+        rows = conn.execute(
+            "SELECT id, title FROM assignments WHERE id IN (42, 43, 100) ORDER BY id"
+        ).fetchall()
+    assert rows == [
+        (42, "Aktualizovaná úloha"),
+        (43, "Zachovaná úloha"),
+        (100, "Nová úloha"),
+    ]
 
 
 def test_student_assignment_prefills_latest_submission(tmp_path: Path) -> None:

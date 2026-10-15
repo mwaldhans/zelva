@@ -34,6 +34,12 @@ Pro prihlaseni vytvorte v Google Cloud OAuth 2.0 Web Client a jako autorizovany 
 https://python.gymnzidlo.cz/auth/callback
 ```
 
+Pro lokalni beh pridejte do OAuth klienta take autorizovany redirect URI:
+
+```text
+http://127.0.0.1:5000/auth/callback
+```
+
 Aplikace prijima pouze overene Google ucty s adresou `@gymnzidlo.cz`. Nastavte produkcni promenne:
 
 ```text
@@ -132,5 +138,8 @@ Modul (`src/zelva/python_course.py`) používá přihlášení přes Google z hl
 
 - Data jsou v samostatné SQLite DB `src/instance/python.db` (cesta jde změnit proměnnou `PYTHON_DATABASE`).
 - Učitelé: admin (`ADMIN_EMAIL`) a e-maily v `PYTHON_TEACHER_EMAILS` (oddělené čárkou); ostatní jsou studenti.
+- Na hlavním rozcestníku je vedle Želvy a Pythonu také samostatná sekce AZ kvíz: dva hráči se spárují online, střídají se v otázkách z Pythonu a za správnou odpověď obsadí políčko na trojúhelníkové desce. Chybná odpověď označí vybrané pole šedě a předá tah. Šedé pole může kdykoli vybrat kterýkoli hráč; oběma se otevře společné modální reakční kolo a pole získá hráč s kratším časem po shodě obrazců. Reakční výhra přidělí pouze šedé pole a sama o sobě hru neukončí. Mezerník stisknutý před shodou znamená okamžitou prohru. Vyhrává hráč, jehož souvislá skupina polí propojí všechny tři strany; po výhře se oběma zobrazí vítěz. Hotové hry a statistiky výher/proher proti soupeřům se ukládají do tabulky `az_games` v `python.db`.
+- Administrátor (`ADMIN_EMAIL`) může přes odkaz **Upravit otázky** v AZ kvízu přidávat, upravovat, deaktivovat a mazat otázky uložené v tabulce `az_questions`. Musí zůstat alespoň jedna aktivní otázka; změny neovlivní otázku už přidělenou rozehrané hře.
+- Obsah lze přenášet po oblastech samostatně jako verzovaný JSON: otázky AZ kvízu na stránce jejich správy, vzory Želvy v administraci a úlohy Pythonu na učitelském dashboardu. Import sloučí položky podle ID, aktualizuje shodná ID, přidá nové a ostatní zachová; přenos neobsahuje studentský postup, odevzdání, statistiky ani historii her. Export a import Želvy jsou vyhrazeny administrátorovi, Pythonu učitelům a AZ kvízu administrátorovi.
 - Z původní databáze `pzthon2026` byla importována cvičení (tabulka `assignments`); žákovské účty, odevzdání a třídy se nepřenášejí. Nekopíruj proto celou starou `database.db` přes `python.db`. Před importem dalších dat vždy nejdřív zazálohuj cílovou databázi.
 - Pozor: kód studentů se spouští na serveru přes `subprocess` (timeout 5 s, bez sandboxu).
