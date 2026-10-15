@@ -435,6 +435,7 @@ def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
     )
     assert challenge.status_code == 200
     assert challenge.json["challenge"]["cell"] == 0
+    assert isinstance(challenge.json["challenge"]["server_now_ms"], (int, float))
     assert challenge.json["question"] is None
     assert player_a.get(f"/python/azkviz/game/{game_id}").json["challenge"] is not None
     assert player_b.get(f"/python/azkviz/game/{game_id}").json["challenge"] is not None
@@ -469,6 +470,9 @@ def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
     assert reaction_b.json["correct"] is True
     assert reaction_a.json["correct"] is True
     assert reaction_a.json["game"]["board"][0] == "B"
+    assert reaction_a.json["game"]["status"] == "playing"
+    assert reaction_a.json["game"]["winner"] is None
+    assert reaction_a.json["game"]["winner_name"] is None
     assert reaction_a.json["game"]["challenge"] is None
 
     # The next player creates another gray cell and loses immediately on an early key press.
@@ -508,7 +512,7 @@ def test_azkviz_reaction_winner_only_claims_cell(tmp_path: Path) -> None:
     player_b.post("/python/azkviz/match")
     game_id = waiting["id"]
 
-    board = ["X"] + ["a@gymnzidlo.cz"] * 8 + [None]
+    board = ["X"] + ["a@gymnzidlo.cz"] * 8 + ["b@gymnzidlo.cz"]
     with sqlite3.connect(python_db) as conn:
         conn.execute(
             """
@@ -528,11 +532,57 @@ def test_azkviz_reaction_winner_only_claims_cell(tmp_path: Path) -> None:
 
     finished = player_a.get(f"/python/azkviz/game/{game_id}")
     assert finished.status_code == 200
-    assert finished.json["board"] == ["A"] * 9 + [None]
+    assert finished.json["board"] == ["A"] * 9 + ["B"]
     assert finished.json["status"] == "playing"
     assert finished.json["winner"] is None
+    assert finished.json["winner_name"] is None
     assert finished.json["my_turn"] is False
     assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+
+
+def test_azkviz_gray_cell_prevents_full_board_draw(tmp_path: Path) -> None:
+    python_db = tmp_path / "p.db"
+    app = _python_app(tmp_path)
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+
+    game = player_a.post("/python/azkviz/match").json
+    player_b.post("/python/azkviz/match")
+    game_id = game["id"]
+    nearly_full_board = [
+        "a@gymnzidlo.cz", "b@gymnzidlo.cz", "a@gymnzidlo.cz",
+        "b@gymnzidlo.cz", "a@gymnzidlo.cz", "b@gymnzidlo.cz",
+        "a@gymnzidlo.cz", "b@gymnzidlo.cz", "a@gymnzidlo.cz", None,
+    ]
+    with sqlite3.connect(python_db) as conn:
+        conn.execute(
+            "UPDATE az_games SET board = ?, turn_email = ? WHERE id = ?",
+            (json.dumps(nearly_full_board), "a@gymnzidlo.cz", game_id),
+        )
+        question = json.loads(
+            conn.execute(
+                "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
+            ).fetchone()[0]
+        )
+
+    response = player_a.post(
+        f"/python/azkviz/game/{game_id}/answer",
+        json={
+            "answer": (question["answer"] + 1) % len(question["options"]),
+            "cell": 9,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json["game"]["board"][-1] == "X"
+    assert response.json["game"]["status"] == "playing"
+    assert response.json["game"]["winner"] is None
+    challenge = player_b.post(
+        f"/python/azkviz/game/{game_id}/challenge", json={"cell": 9}
+    )
+    assert challenge.status_code == 200
+    assert challenge.json["challenge"]["cell"] == 9
 
 
 def test_azkviz_abandons_active_games_with_old_board_shape(tmp_path: Path) -> None:
@@ -730,6 +780,23 @@ def test_azkviz_question_export_import_merges_by_id(tmp_path: Path) -> None:
         assert conn.execute(
             "SELECT question FROM az_questions WHERE id = ?", (first_id,)
         ).fetchone()[0] == "Upravená exportovaná otázka?"
+
+
+def test_azkviz_import_accepts_utf8_bom(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    admin = app.test_client()
+    _login(admin, app.config["ADMIN_EMAIL"])
+
+    exported = admin.get("/python/admin/azkviz/questions/export")
+    uploaded = b"\xef\xbb\xbf" + exported.data
+    response = admin.post(
+        "/python/admin/azkviz/questions/import",
+        data={"file": (BytesIO(uploaded), "azkviz-bom.json")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert "Import otázek dokončen" in response.get_data(as_text=True)
 
 
 def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(

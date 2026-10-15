@@ -164,6 +164,7 @@
     let challengeRenderTimer = null;
     let reacting = false;
     let shownChallengeFrame = -1;
+    let challengeClockOffsetMs = 0;
 
     function prepareAudio() {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -320,6 +321,9 @@
         opponentPlayerName.className = "badge " + (game.my_color === "A" ? "badge-primary" : "badge-danger");
         drawBoard(game);
         if (game.challenge) {
+            if (Number.isFinite(game.challenge.server_now_ms)) {
+                challengeClockOffsetMs = game.challenge.server_now_ms - Date.now();
+            }
             if (!reactionModal.open) reactionModal.showModal();
             const reactions = [];
             if (game.challenge.my_reacted) reactions.push("Tvůj čas je zaznamenán.");
@@ -401,7 +405,7 @@
     function renderChallengeFrame() {
         const challenge = currentGame && currentGame.challenge;
         if (!challenge) return;
-        const elapsed = Date.now() - challenge.started_at;
+        const elapsed = Date.now() + challengeClockOffsetMs - challenge.started_at;
         const frameIndex = Math.max(
             0,
             Math.min(challenge.frames.length - 1, Math.floor(elapsed / challenge.interval_ms))

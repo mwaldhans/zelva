@@ -578,6 +578,7 @@ def _az_challenge_view(game, email):
     return {
         "cell": game["challenge_cell"],
         "started_at": game["challenge_started_at"],
+        "server_now_ms": time.time() * 1000,
         "target_ms": game["challenge_target_ms"],
         "frames": json.loads(game["challenge_frames"]),
         "interval_ms": AZ_SHAPE_INTERVAL_MS,
@@ -591,17 +592,16 @@ def _az_finish_challenge(conn, game, reactions):
     board = json.loads(game["board"])
     challenge_cell = game["challenge_cell"]
     if reactions:
-        winner_email = min(reactions, key=reactions.get)
-        board[challenge_cell] = winner_email
+        cell_winner_email = min(reactions, key=reactions.get)
+        board[challenge_cell] = cell_winner_email
         status = "playing"
         next_turn = (
             game["player_b_email"]
-            if winner_email == game["player_a_email"]
+            if cell_winner_email == game["player_a_email"]
             else game["player_a_email"]
         )
         feedback = "Souboj dokončen. Pole získal hráč s kratším reakčním časem."
     else:
-        winner_email = None
         status = "playing"
         next_turn = (
             game["player_b_email"]
@@ -609,11 +609,7 @@ def _az_finish_challenge(conn, game, reactions):
             else game["player_a_email"]
         )
         feedback = "Nikdo nestiskl mezerník včas. Pole zůstává šedé."
-
-    if status != "finished" and all(board):
-        status = "finished"
-        winner_email = None
-        next_turn = None
+    winner_email = None
 
     next_question = (
         _az_next_question(conn, json.loads(game["current_question"]))
@@ -1378,7 +1374,7 @@ def azkviz_answer(game_id):
             won = _az_connected(board, email)
             if won:
                 status, turn_email, winner_email = "finished", None, email
-            elif all(board):
+            elif all(cell not in (None, "X") for cell in board):
                 status, turn_email, winner_email = "finished", None, None
             else:
                 status = "playing"
@@ -1387,7 +1383,7 @@ def azkviz_answer(game_id):
             feedback = "Správně! Pole je vaše."
         else:
             board[cell] = "X"
-            if all(board):
+            if all(cell not in (None, "X") for cell in board):
                 status, turn_email, winner_email = "finished", None, None
             else:
                 status = "playing"

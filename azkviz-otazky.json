@@ -34,7 +34,7 @@
 {
 "id": 5,
 "question": "Jak se správně porovnává, zda jsou dvě hodnoty stejné?",
-"options": ["=", "", "!=", ":="],
+"options": ["=", "==", "!=", ":="],
 "answer": 1,
 "active": true
 },
@@ -601,7 +601,7 @@
 {
 "id": 86,
 "question": "Jak se píše víceřádkový docstring?",
-"options": ["// komentář", "/* komentář */", """" dokumentace """", "# komentář"],
+"options": ["// komentář", "/* komentář */", "\"\"\" dokumentace \"\"\"", "# komentář"],
 "answer": 2,
 "active": true
 },
@@ -776,7 +776,7 @@
 {
 "id": 111,
 "question": "Který operátor porovnává identitu objektů (zda jde o stejné místo v paměti)?",
-"options": ["", "is", "=", "in"],
+"options": ["is not", "is", "=", "in"],
 "answer": 1,
 "active": true
 },
@@ -1434,7 +1434,7 @@
 {
 "id": 205,
 "question": "Který operátor provádí bitový XOR?",
-"options": ["^", "xor", "", "~"],
+"options": ["^", "xor", "&", "~"],
 "answer": 0,
 "active": true
 },
@@ -3128,27 +3128,27 @@
 {
 "id": 447,
 "question": "Proč se u regulárních výrazů v Pythonu často používají raw řetězce r'text'?",
-"options": ["Zabraňují interpretaci zpětných lomítek \ jako únikových sekvencí v Pythonu", "Zrychlují vyhledávání", "Převedou text na velká písmena", "Jsou povinné"],
+"options": ["Zabraňují interpretaci zpětných lomítek \\ jako únikových sekvencí v Pythonu", "Zrychlují vyhledávání", "Převedou text na velká písmena", "Jsou povinné"],
 "answer": 0,
 "active": true
 },
 {
 "id": 448,
-"question": "Co znamená speciální sekvence \d v regulárním výrazu?",
+"question": "Co znamená speciální sekvence \\d v regulárním výrazu?",
 "options": ["Libovolná číslice (0-9)", "Libovolné písmeno", "Bílý znak", "Slovo"],
 "answer": 0,
 "active": true
 },
 {
 "id": 449,
-"question": "Co znamená speciální sekvence \w v regulárním výrazu?",
+"question": "Co znamená speciální sekvence \\w v regulárním výrazu?",
 "options": ["Alfanumerický znak (písmeno, číslice, podtržítko)", "Pouze bílé znaky", "Pouze velká písmena", "Slovo z mezerami"],
 "answer": 0,
 "active": true
 },
 {
 "id": 450,
-"question": "Co znamená speciální sekvence \s v regulárním výrazu?",
+"question": "Co znamená speciální sekvence \\s v regulárním výrazu?",
 "options": ["Bílý znak (mezera, tabulátor, nový řádek)", "Písmeno s", "Číslice", "Konec řádku"],
 "answer": 0,
 "active": true
