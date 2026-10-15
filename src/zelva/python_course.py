@@ -4,9 +4,9 @@
 P?ihl??en? ?e?? hlavn? aplikace (Google OAuth); tento blueprint z p?ihl??en?ho
 u?ivatele jen odvod? roli (u?itel/student).
 """
+import json
 import os
 import re
-import json
 import sqlite3
 import subprocess
 import sys
@@ -345,10 +345,11 @@ def init_db(database_path):
             source_key TEXT
         )
     """)
-    try:
+    question_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(az_questions)")
+    }
+    if "source_key" not in question_columns:
         conn.execute("ALTER TABLE az_questions ADD COLUMN source_key TEXT")
-    except sqlite3.OperationalError:
-        pass
     if conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0] == 0:
         conn.executemany(
             "INSERT INTO az_questions (question, options, answer, source_key) VALUES (?, ?, ?, ?)",
@@ -362,20 +363,29 @@ def init_db(database_path):
                 for question in AZ_QUESTIONS
             ],
         )
+    default_keys = {
+        question["question"]: uuid5(
+            NAMESPACE_URL, "zelva:azkviz:" + question["question"]
+        ).hex
+        for question in AZ_QUESTIONS
+    }
+    used_source_keys = {
+        row["source_key"]
+        for row in conn.execute(
+            "SELECT source_key FROM az_questions "
+            "WHERE source_key IS NOT NULL AND source_key != ''"
+        )
+    }
     for row in conn.execute(
         "SELECT id, question FROM az_questions WHERE source_key IS NULL OR source_key = ''"
     ).fetchall():
-        default_key = next(
-            (
-                uuid5(NAMESPACE_URL, "zelva:azkviz:" + question["question"]).hex
-                for question in AZ_QUESTIONS
-                if question["question"] == row["question"]
-            ),
-            uuid4().hex,
-        )
+        source_key = default_keys.get(row["question"])
+        if source_key is None or source_key in used_source_keys:
+            source_key = uuid4().hex
+        used_source_keys.add(source_key)
         conn.execute(
             "UPDATE az_questions SET source_key = ? WHERE id = ?",
-            (default_key, row["id"]),
+            (source_key, row["id"]),
         )
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_az_questions_source_key "

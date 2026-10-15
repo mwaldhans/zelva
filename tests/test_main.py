@@ -732,7 +732,9 @@ def test_azkviz_question_export_import_merges_by_id(tmp_path: Path) -> None:
         ).fetchone()[0] == "Upravená exportovaná otázka?"
 
 
-def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(tmp_path: Path) -> None:
+def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(
+    tmp_path: Path,
+) -> None:
     source_dir = tmp_path / "source"
     target_dir = tmp_path / "target"
     source_dir.mkdir()
@@ -797,7 +799,7 @@ def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(tmp_path: 
     target_database = target_dir / "p.db"
     with sqlite3.connect(target_database) as conn:
         count = conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0]
-        id_one_question = conn.execute(
+        target_question_after_import = conn.execute(
             "SELECT question FROM az_questions WHERE id = ?", (target_collision[0],)
         ).fetchone()[0]
         imported_count = conn.execute(
@@ -805,7 +807,7 @@ def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(tmp_path: 
             ("Cizí otázka z jiné databáze?",),
         ).fetchone()[0]
     assert count == len(target_questions) + 2
-    assert id_one_question == target_collision[1]
+    assert target_question_after_import == target_collision[1]
     assert imported_count == 1
 
 
