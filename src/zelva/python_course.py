@@ -326,6 +326,8 @@ def init_db(database_path):
         ("challenge_frames", "TEXT"),
         ("challenge_reactions", "TEXT"),
         ("challenge_active", "INTEGER NOT NULL DEFAULT 0"),
+        ("player_a_picture", "TEXT"),
+        ("player_b_picture", "TEXT"),
     ):
         try:
             conn.execute(f"ALTER TABLE az_games ADD COLUMN {column} {definition}")
@@ -350,19 +352,27 @@ def init_db(database_path):
     }
     if "source_key" not in question_columns:
         conn.execute("ALTER TABLE az_questions ADD COLUMN source_key TEXT")
-    if conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0] == 0:
-        conn.executemany(
-            "INSERT INTO az_questions (question, options, answer, source_key) VALUES (?, ?, ?, ?)",
-            [
-                (
-                    question["question"],
-                    json.dumps(question["options"], ensure_ascii=False),
-                    question["answer"],
-                    uuid5(NAMESPACE_URL, "zelva:azkviz:" + question["question"]).hex,
-                )
-                for question in AZ_QUESTIONS
-            ],
-        )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS az_meta (key TEXT PRIMARY KEY, value TEXT)"
+    )
+    questions_seeded = conn.execute(
+        "SELECT 1 FROM az_meta WHERE key = 'questions_seeded'"
+    ).fetchone()
+    if not questions_seeded:
+        if conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0] == 0:
+            conn.executemany(
+                "INSERT INTO az_questions (question, options, answer, source_key) VALUES (?, ?, ?, ?)",
+                [
+                    (
+                        question["question"],
+                        json.dumps(question["options"], ensure_ascii=False),
+                        question["answer"],
+                        uuid5(NAMESPACE_URL, "zelva:azkviz:" + question["question"]).hex,
+                    )
+                    for question in AZ_QUESTIONS
+                ],
+            )
+        conn.execute("INSERT OR IGNORE INTO az_meta (key, value) VALUES ('questions_seeded', '1')")
     default_keys = {
         question["question"]: uuid5(
             NAMESPACE_URL, "zelva:azkviz:" + question["question"]
@@ -473,7 +483,7 @@ def login_required(f):
 
 def _az_player_required():
     if session.get("role") not in ("student", "teacher"):
-        return {"error": "AZ kvíz je dostupný pouze přihlášeným uživatelům."}, 403
+        return {"error": "Kvinta kvíz je dostupný pouze přihlášeným uživatelům."}, 403
     return None
 
 
@@ -507,7 +517,9 @@ def _az_next_question(conn, current_question=None):
         "SELECT id, question, options, answer FROM az_questions WHERE active = 1"
     ).fetchall()
     if not rows:
-        raise RuntimeError("V AZ kvízu není žádná aktivní otázka.")
+        if current_question is not None:
+            return current_question
+        raise RuntimeError("V Kvinta kvízu není žádná aktivní otázka.")
     available = [
         row for row in rows
         if current_question is None or row["id"] != current_question.get("id")
@@ -535,20 +547,27 @@ def _az_connected(board, email):
         return False
 
     visited = set()
-    pending = [index for index, cell in enumerate(board) if cell == email]
     directions = ((1, 0), (-1, 0), (0, 1), (0, -1), (1, -1), (-1, 1))
 
-    while pending:
-        index = pending.pop()
-        if index in visited:
+    for start, cell in enumerate(board):
+        if cell != email or start in visited:
             continue
-        visited.add(index)
-        q, r = coordinates[index]
-        for dq, dr in directions:
-            neighbor = coordinate_indexes.get((q + dq, r + dr))
-            if neighbor is not None and neighbor not in visited and board[neighbor] == email:
-                pending.append(neighbor)
-    return all(visited & side for side in sides)
+        component = set()
+        pending = [start]
+        while pending:
+            index = pending.pop()
+            if index in component:
+                continue
+            component.add(index)
+            q, r = coordinates[index]
+            for dq, dr in directions:
+                neighbor = coordinate_indexes.get((q + dq, r + dr))
+                if neighbor is not None and neighbor not in component and board[neighbor] == email:
+                    pending.append(neighbor)
+        visited |= component
+        if all(component & side for side in sides):
+            return True
+    return False
 
 
 def _az_new_challenge():
@@ -610,6 +629,11 @@ def _az_finish_challenge(conn, game, reactions):
         )
         feedback = "Nikdo nestiskl mezerník včas. Pole zůstává šedé."
     winner_email = None
+    if reactions and _az_connected(board, cell_winner_email):
+        status, next_turn, winner_email = "finished", None, cell_winner_email
+        feedback = "Souboj dokončen. Pole získal hráč s kratším reakčním časem a vyhrál hru."
+    elif all(cell not in (None, "X") for cell in board):
+        status, next_turn = "finished", None
 
     next_question = (
         _az_next_question(conn, json.loads(game["current_question"]))
@@ -678,6 +702,8 @@ def _az_game_view(game, email):
         "my_turn": my_turn,
         "my_name": my_name,
         "opponent_name": opponent_name,
+        "player_a_picture": game["player_a_picture"],
+        "player_b_picture": game["player_b_picture"],
         "winner": winner,
         "winner_name": (
             player_a_name if game["winner_email"] == game["player_a_email"]
@@ -757,6 +783,12 @@ def azkviz_admin_questions():
             action = request.form.get("action", "")
             question_id_raw = request.form.get("question_id", "")
             question_id = int(question_id_raw) if question_id_raw.isdigit() else None
+
+            if action == "delete_all":
+                conn.execute("DELETE FROM az_questions")
+                conn.commit()
+                flash("Všechny otázky byly smazány. Před další hrou přidej alespoň jednu aktivní otázku.")
+                return redirect(url_for("python.azkviz_admin_questions"))
 
             if action == "delete":
                 existing = conn.execute(
@@ -1048,7 +1080,9 @@ def azkviz_match():
         return jsonify(denied[0]), denied[1]
 
     email = session["username"]
-    name = (session.get("user") or {}).get("name") or email
+    user = session.get("user") or {}
+    name = user.get("name") or email
+    picture = user.get("picture") or None
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -1079,25 +1113,37 @@ def azkviz_match():
                 (email,),
             ).fetchone()
             if game:
-                question = _az_next_question(conn)
+                try:
+                    question = _az_next_question(conn)
+                except RuntimeError as exc:
+                    conn.rollback()
+                    return jsonify({"error": str(exc)}), 409
                 conn.execute(
                     """
                     UPDATE az_games
-                    SET player_b_email = ?, player_b_name = ?, status = 'playing',
+                    SET player_b_email = ?, player_b_name = ?, player_b_picture = ?,
+                        status = 'playing',
                         turn_email = player_a_email, current_question = ?,
                         question_index = ?, updated_at = CURRENT_TIMESTAMP
                     WHERE id = ? AND status = 'waiting'
                     """,
-                    (email, name, json.dumps(question, ensure_ascii=False), None, game["id"]),
+                    (
+                        email, name, picture, json.dumps(question, ensure_ascii=False),
+                        None, game["id"],
+                    ),
                 )
             else:
                 conn.execute(
                     """
                     INSERT INTO az_games
-                        (player_a_email, player_a_name, status, turn_email, board, question_index)
-                    VALUES (?, ?, 'waiting', NULL, ?, NULL)
+                        (player_a_email, player_a_name, player_a_picture, status,
+                         turn_email, board, question_index)
+                    VALUES (?, ?, ?, 'waiting', NULL, ?, NULL)
                     """,
-                    (email, name, json.dumps([None] * (AZ_BOARD_SIZE * (AZ_BOARD_SIZE + 1) // 2))),
+                    (
+                        email, name, picture,
+                        json.dumps([None] * (AZ_BOARD_SIZE * (AZ_BOARD_SIZE + 1) // 2)),
+                    ),
                 )
         conn.commit()
         game_id = game["id"] if game else conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -1173,6 +1219,9 @@ def azkviz_start_challenge(game_id):
         if game["status"] != "playing":
             conn.rollback()
             return jsonify({"error": "Hra právě neprobíhá."}), 409
+        if game["turn_email"] != email:
+            conn.rollback()
+            return jsonify({"error": "Šedé pole může losovat pouze hráč, který je na tahu."}), 409
         if game["challenge_active"]:
             conn.rollback()
             return jsonify({"error": "Souboj o šedé pole už probíhá."}), 409
@@ -1245,25 +1294,23 @@ def azkviz_challenge_react(game_id):
             })
 
         if now_ms < target_at:
-            winner_email = (
+            cell_winner_email = (
                 game["player_b_email"]
                 if email == game["player_a_email"]
                 else game["player_a_email"]
             )
-            conn.execute(
-                """
-                UPDATE az_games
-                SET status = 'finished', winner_email = ?, turn_email = NULL,
-                    challenge_active = 0, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (winner_email, game_id),
+            game, feedback = _az_finish_challenge(
+                conn,
+                game,
+                {cell_winner_email: 0},
             )
-            game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
             conn.commit()
             return jsonify({
                 "correct": False,
-                "feedback": "Mezerník jsi stiskl/a dřív. Vyhrává soupeř.",
+                "feedback": (
+                    "Mezerník jsi stiskl/a předčasně. Šedé pole získává soupeř; "
+                    "další tah má hráč, který pole nezískal."
+                ),
                 "game": _az_game_view(game, email),
             })
 

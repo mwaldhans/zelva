@@ -65,7 +65,7 @@ def test_hub_shows_azkviz_as_third_main_section(tmp_path: Path) -> None:
     html = response.get_data(as_text=True)
     assert response.status_code == 200
     assert html.index("<h2>Želva</h2>") < html.index("<h2>Programování v Pythonu</h2>")
-    assert html.index("<h2>Programování v Pythonu</h2>") < html.index("<h2>AZ kvíz</h2>")
+    assert html.index("<h2>Programování v Pythonu</h2>") < html.index("<h2>Kvinta kvíz</h2>")
     assert "/python/azkviz" in html
 
 
@@ -81,18 +81,28 @@ def test_teacher_can_play_azkviz_against_student(tmp_path: Path) -> None:
 
     with teacher.session_transaction() as session:
         email = app.config["ADMIN_EMAIL"]
-        session["user"] = {"sub": email, "email": email, "name": "Učitel"}
+        session["user"] = {
+            "sub": email,
+            "email": email,
+            "name": "Učitel",
+            "picture": "https://lh3.googleusercontent.com/teacher-photo",
+        }
     with student.session_transaction() as session:
         session["user"] = {
             "sub": "student@gymnzidlo.cz",
             "email": "student@gymnzidlo.cz",
             "name": "Student",
+            "picture": "https://lh3.googleusercontent.com/student-photo",
         }
 
     page = teacher.get("/python/azkviz")
     assert page.status_code == 200
     page_html = page.get_data(as_text=True)
-    assert "AZ kvíz" in page_html
+    assert "Kvinta kvíz" in page_html
+    assert "První hráč" in page_html
+    assert "Druhý hráč" in page_html
+    assert 'id="player-a-turn"' in page_html
+    assert "clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%)" in page_html
     assert '<dialog id="question-modal"' in page_html
     assert '<dialog id="reaction-modal"' in page_html
     assert "reactionModal.showModal()" in page_html
@@ -113,6 +123,11 @@ def test_teacher_can_play_azkviz_against_student(tmp_path: Path) -> None:
     assert paired.status_code == 200
     assert paired.json["id"] == waiting.json["id"]
     assert paired.json["status"] == "playing"
+    assert paired.json["player_a_picture"] == "https://lh3.googleusercontent.com/teacher-photo"
+    assert paired.json["player_b_picture"] == "https://lh3.googleusercontent.com/student-photo"
+    assert teacher.get(f"/python/azkviz/game/{paired.json['id']}").json["player_b_picture"] == (
+        "https://lh3.googleusercontent.com/student-photo"
+    )
 
     with sqlite3.connect(python_db) as conn:
         teacher_student_record = conn.execute(
@@ -429,8 +444,13 @@ def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
     assert not player_a.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
     assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
 
-    # Either participant can start the shared challenge, even when it is not their turn.
-    challenge = player_a.post(
+    # Only the player whose turn it is may start the shared gray-cell challenge.
+    denied_challenge = player_a.post(
+        f"/python/azkviz/game/{game_id}/challenge", json={"cell": 0}
+    )
+    assert denied_challenge.status_code == 409
+    assert "je na tahu" in denied_challenge.json["error"]
+    challenge = player_b.post(
         f"/python/azkviz/game/{game_id}/challenge", json={"cell": 0}
     )
     assert challenge.status_code == 200
@@ -474,6 +494,12 @@ def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
     assert reaction_a.json["game"]["winner"] is None
     assert reaction_a.json["game"]["winner_name"] is None
     assert reaction_a.json["game"]["challenge"] is None
+    assert player_a.get(f"/python/azkviz/game/{game_id}").json["my_turn"] == (
+        reaction_a.json["game"]["board"][0] == "B"
+    )
+    assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"] == (
+        reaction_a.json["game"]["board"][0] == "A"
+    )
 
     # The next player creates another gray cell and loses immediately on an early key press.
     with sqlite3.connect(python_db) as conn:
@@ -482,22 +508,33 @@ def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
                 "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
             ).fetchone()[0]
         )
-    missed = player_a.post(
+    current_turn = (
+        player_a
+        if player_a.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+        else player_b
+    )
+    missed = current_turn.post(
         f"/python/azkviz/game/{game_id}/answer",
         json={"answer": (current["answer"] + 1) % len(current["options"]), "cell": 1},
     )
     assert missed.status_code == 200
     assert missed.json["game"]["board"][1] == "X"
-    early_challenge = player_a.post(
+    challenge_turn = player_b if current_turn is player_a else player_a
+    early_challenge = challenge_turn.post(
         f"/python/azkviz/game/{game_id}/challenge", json={"cell": 1}
     )
     assert early_challenge.status_code == 200
-    early = player_a.post(f"/python/azkviz/game/{game_id}/challenge/react")
+    early = challenge_turn.post(f"/python/azkviz/game/{game_id}/challenge/react")
     assert early.status_code == 200
     assert early.json["correct"] is False
-    assert early.json["game"]["status"] == "finished"
-    assert early.json["game"]["winner"] == "opponent"
-    assert early.json["game"]["winner_name"] == "Test"
+    assert early.json["game"]["status"] == "playing"
+    assert early.json["game"]["winner"] is None
+    assert early.json["game"]["winner_name"] is None
+    assert early.json["game"]["board"][1] == (
+        "A" if challenge_turn is player_b else "B"
+    )
+    assert challenge_turn.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+    assert not current_turn.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
 
 
 def test_azkviz_reaction_winner_only_claims_cell(tmp_path: Path) -> None:
@@ -533,11 +570,28 @@ def test_azkviz_reaction_winner_only_claims_cell(tmp_path: Path) -> None:
     finished = player_a.get(f"/python/azkviz/game/{game_id}")
     assert finished.status_code == 200
     assert finished.json["board"] == ["A"] * 9 + ["B"]
+    assert finished.json["status"] == "finished"
+    assert finished.json["winner"] == "you"
+
+    second = player_a.post("/python/azkviz/match").json
+    player_b.post("/python/azkviz/match")
+    board = ["X", None, None, None, None, None, None, None, None, "b@gymnzidlo.cz"]
+    with sqlite3.connect(python_db) as conn:
+        conn.execute(
+            """
+            UPDATE az_games
+            SET board = ?, challenge_cell = 0, challenge_started_at = ?,
+                challenge_target_ms = 100, challenge_frames = '[]',
+                challenge_reactions = ?, challenge_active = 1
+            WHERE id = ?
+            """,
+            (json.dumps(board), 0, json.dumps({"a@gymnzidlo.cz": 20}), second["id"]),
+        )
+    finished = player_a.get(f"/python/azkviz/game/{second['id']}")
     assert finished.json["status"] == "playing"
     assert finished.json["winner"] is None
-    assert finished.json["winner_name"] is None
     assert finished.json["my_turn"] is False
-    assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
+    assert player_b.get(f"/python/azkviz/game/{second['id']}").json["my_turn"]
 
 
 def test_azkviz_gray_cell_prevents_full_board_draw(tmp_path: Path) -> None:
@@ -729,6 +783,29 @@ def test_admin_can_manage_azkviz_questions_and_inflight_question_is_unchanged(
             ("Neplatná otázka?",),
         ).fetchone()[0] == 0
 
+
+def test_admin_can_delete_all_azkviz_questions(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    admin = app.test_client()
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(admin, app.config["ADMIN_EMAIL"])
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+    url = "/python/admin/azkviz/questions"
+
+    response = admin.post(url, data={"action": "delete_all"})
+    assert response.status_code == 302
+    with sqlite3.connect(app.config["PYTHON_DATABASE"]) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0] == 0
+
+    init_db(app.config["PYTHON_DATABASE"])
+    with sqlite3.connect(app.config["PYTHON_DATABASE"]) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM az_questions").fetchone()[0] == 0
+
+    assert admin.get(url).status_code == 200
+    assert player_a.post("/python/azkviz/match").status_code == 200
+    assert player_b.post("/python/azkviz/match").status_code == 409
 
 def test_azkviz_question_export_import_merges_by_id(tmp_path: Path) -> None:
     app = _python_app(tmp_path)

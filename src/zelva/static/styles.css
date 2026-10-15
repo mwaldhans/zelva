@@ -654,12 +654,38 @@ canvas {
 
 .task-group-title {
     margin: 0;
-    padding: 0.25rem 0.45rem;
+    padding: 0.3rem 0.45rem;
     border-bottom: 1px solid var(--line);
     color: #536414;
     font-size: 0.78rem;
+    font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
+    cursor: pointer;
+    user-select: none;
+}
+
+.task-group:not([open]) > .task-group-title {
+    border-bottom-color: transparent;
+}
+
+.admin-fold {
+    margin-top: 0.7rem;
+    border-top: 1px solid var(--line);
+    padding-top: 0.5rem;
+}
+
+.admin-fold > summary {
+    cursor: pointer;
+    font-weight: 700;
+    font-size: 0.95rem;
+}
+
+.admin-fold > .new-task-form,
+.admin-fold > form.new-task-form {
+    margin-top: 0.5rem;
+    padding-top: 0;
+    border-top: 0;
 }
 
 .task-button {

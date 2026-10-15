@@ -33,8 +33,9 @@
                 {% endfor %}
             {% endwith %}
 
-            <section class="new-task-form">
-                <h2>Přenos obsahu Želvy</h2>
+            <details class="admin-fold">
+                <summary>Přenos obsahu Želvy</summary>
+                <section class="new-task-form">
                 <p class="admin-note">Export obsahuje přepisy, vlastní úlohy, skryté úlohy a pořadí kategorií. Import sloučí podle ID a nic dalšího nesmaže.</p>
                 <a class="secondary" href="{{ url_for('export_turtle_content') }}">Exportovat Želvu (JSON)</a>
                 <form method="post" action="{{ url_for('import_turtle_content') }}" enctype="multipart/form-data">
@@ -42,7 +43,8 @@
                     <input id="turtle-content-import" type="file" name="file" accept=".json,application/json" required>
                     <button type="submit">Importovat obsah Želvy</button>
                 </form>
-            </section>
+                </section>
+            </details>
 
             <label for="taskFilter">Najít úlohu</label>
             <input id="taskFilter" class="task-filter" type="search" placeholder="Zadej část názvu nebo ID">
@@ -62,8 +64,9 @@
                     {% endfor %}
                 </div>
             </div>
+            <details class="admin-fold">
+            <summary>Nová úloha</summary>
             <form id="newTaskForm" class="new-task-form">
-                <h2>Nová úloha</h2>
                 <input id="newTaskId" type="text" required pattern="[a-z][a-z0-9_-]{2,48}" placeholder="ID, např. spirala_1">
                 <input id="newTaskName" type="text" required placeholder="Název úlohy">
                 <input id="newTaskCategory" type="text" required placeholder="Kategorie">
@@ -77,13 +80,16 @@
                 <button type="submit">Přidat úlohu</button>
                 <p id="newTaskStatus" class="admin-status" aria-live="polite"></p>
             </form>
+            </details>
+            <details class="admin-fold">
+            <summary>Pořadí kategorií</summary>
             <section class="new-task-form category-order-panel">
-                <h2>Pořadí kategorií</h2>
                 <p class="admin-note">Pomocí šipek nastav pořadí kategorií v seznamu úloh.</p>
                 <div id="categoryOrderList" class="task-list" aria-label="Pořadí kategorií"></div>
                 <button id="saveCategoryOrderBtn" type="button">Uložit pořadí kategorií</button>
                 <p id="categoryOrderStatus" class="admin-status" aria-live="polite"></p>
             </section>
+            </details>
         </section>
 
         <section class="panel admin-editor">
@@ -206,7 +212,7 @@
         let basePatternsById = {};
         let customPatternIds = new Set({{ custom_pattern_ids_json | safe }});
         let categoryOrder = [];
-
+        const openCategories = new Set();
         function renderCategoryOrder() {
             const categories = new Set(categoryOrder);
             for (const pattern of Object.values(basePatternsById)) {
@@ -336,13 +342,27 @@
             }
 
             const taskListEl = document.getElementById("taskList");
+            for (const openGroup of taskListEl.querySelectorAll("details.task-group")) {
+                const title = openGroup.querySelector("summary")?.dataset.category;
+                if (title) {
+                    if (openGroup.open) {
+                        openCategories.add(title);
+                    } else {
+                        openCategories.delete(title);
+                    }
+                }
+            }
             taskListEl.textContent = "";
             for (const [category, buttons] of groups) {
-                const group = document.createElement("section");
+                const group = document.createElement("details");
                 group.className = "task-group";
-                const heading = document.createElement("h2");
+                group.open = Boolean(filterValue)
+                    || openCategories.has(category)
+                    || buttons.some((button) => button.dataset.patternId === selectedPatternId);
+                const heading = document.createElement("summary");
                 heading.className = "task-group-title";
-                heading.textContent = category;
+                heading.dataset.category = category;
+                heading.textContent = `${category} (${buttons.length})`;
                 group.appendChild(heading);
                 for (const button of buttons) {
                     group.appendChild(button.parentElement);

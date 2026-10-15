@@ -3,18 +3,42 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AZ kvíz | Gymnázium Židlochovice</title>
+    <title>Kvinta kvíz | Gymnázium Židlochovice</title>
     <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.0/css/bootstrap.min.css">
     <link rel="stylesheet" href="{{ url_for('static', filename='python-theme.css') }}">
     <style>
-        .az-board { display: flex; flex-direction: column; align-items: center; gap: .2rem; margin: 1rem auto; }
-        .az-row { display: flex; justify-content: center; gap: .2rem; }
-        .az-cell { width: clamp(52px, 13vw, 82px); aspect-ratio: 1.12; border: 0; background: #e8edc9; color: #243109; font-size: 1.15rem; font-weight: 700; clip-path: polygon(25% 4%, 75% 4%, 100% 50%, 75% 96%, 25% 96%, 0 50%); }
+        .az-game-panel { overflow: hidden; border: 1px solid #dce3e8; border-radius: 1rem; background: #f8f9fa; box-shadow: 0 .75rem 2rem rgba(27, 55, 77, .1); }
+        .az-game-body { padding: clamp(1rem, 3vw, 2rem); }
+        .az-game-heading { margin: 0 0 .35rem; color: #202b36; text-align: center; font-size: clamp(1.5rem, 3vw, 2.2rem); font-weight: 800; }
+        .az-game-status { max-width: 48rem; margin: 0 auto 1rem; color: #53616e; text-align: center; }
+        .az-game-layout { position: relative; display: grid; place-items: center; min-height: 34rem; }
+        .az-player-legend { position: absolute; z-index: 1; top: .5rem; left: 0; display: grid; gap: .65rem; }
+        .az-legend-player { display: flex; gap: .55rem; align-items: center; color: #515b64; font-size: 1.05rem; }
+        .az-player-swatch { flex: 0 0 auto; width: 1.7rem; height: 1.7rem; border-radius: .55rem; }
+        .az-player-swatch.owner-a { background: #f0ef43; }
+        .az-player-swatch.owner-b { background: #c9443e; }
+        .az-player-avatar, .az-player-fallback { flex: 0 0 auto; width: 2.6rem; height: 2.6rem; border-radius: 50%; }
+        .az-player-avatar { object-fit: cover; background: #e1e6ea; }
+        .az-player-fallback { display: grid; place-items: center; background: #e1e6ea; color: #44515c; font-weight: 800; }
+        .az-player-fallback[hidden], .az-player-avatar[hidden] { display: none; }
+        .az-player-copy { display: flex; flex-direction: column; line-height: 1.25; }
+        .az-player-label { color: #77818a; font-size: .78rem; }
+        .az-legend-name { color: #343d46; font-size: .95rem; font-weight: 700; }
+        .az-turn-label { color: #389b31; font-weight: 900; }
+        .az-turn-label[hidden] { display: none; }
+        .az-board { display: flex; flex-direction: column; align-items: center; margin: 1rem auto; }
+        .az-row { display: flex; justify-content: center; }
+        .az-row + .az-row { margin-top: clamp(-25px, -2.65vw, -10px); }
+        .az-logo { display: flex; align-items: center; gap: .6rem; font-weight: 800; }
+        .az-logo-hex { display: grid; place-items: center; width: 2.6rem; aspect-ratio: .87; background: linear-gradient(145deg, #70b7d8, #3695bf); color: #10243a; font-size: 1.4rem; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); filter: drop-shadow(1px 2px 1px #286b98); }
+        .az-cell { display: grid; place-items: center; flex: 0 0 auto; width: clamp(40px, 10vw, 90px); aspect-ratio: .87; padding: 0; border: 0; background: linear-gradient(145deg, #70b7d8, #3695bf); color: #10243a; font-size: clamp(1rem, 3.2vw, 2.5rem); font-weight: 800; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); filter: drop-shadow(1px 2px 1px #286b98); transition: filter .15s, background .15s; }
         .az-cell:disabled { opacity: 1; }
+        .az-cell.owner-x:disabled { opacity: .55; cursor: not-allowed; }
         .az-cell.available { cursor: pointer; }
-        .az-cell.available:hover, .az-cell.selected { outline: 3px solid #879823; outline-offset: -5px; }
-        .az-cell.owner-a { background: #ef9b87; color: #4c170d; }
-        .az-cell.owner-b { background: #81b9e5; color: #092e4a; }
+        .az-cell.available:hover { filter: brightness(1.12) drop-shadow(1px 2px 2px #174b70); }
+        .az-cell.available:focus-visible, .az-cell.selected { background: #f7f449; filter: drop-shadow(0 0 4px #364c60); outline: 0; }
+        .az-cell.owner-a { background: #f0ef43; color: #151c24; }
+        .az-cell.owner-b { background: #c9443e; color: #fff; }
         .az-cell.owner-x { background: #aeb3b8; color: #343a40; }
         .az-cell.owner-x.available { cursor: pointer; }
         .az-stat { min-width: 100px; }
@@ -30,6 +54,12 @@
         .az-answer-result { font-size: 1.15rem; font-weight: 700; }
         .az-winner-banner { margin: .75rem 0; padding: 1.25rem; text-align: center; font-size: clamp(1.7rem, 6vw, 3rem); font-weight: 900; letter-spacing: .04em; border: 3px solid #879823; color: #1f2a07; background: #e7efc8; }
         .az-winner-banner.opponent { border-color: #366d9b; color: #123654; background: #d9eafa; }
+        @media (max-width: 760px) {
+            .az-game-layout { min-height: 0; }
+            .az-player-legend { position: static; display: flex; justify-content: center; flex-wrap: wrap; gap: 1rem; margin-bottom: .5rem; }
+            .az-legend-player { font-size: .95rem; }
+            .az-player-swatch { width: 1.35rem; height: 1.35rem; }
+        }
     </style>
 </head>
 <body class="bg-light python-course">
@@ -38,14 +68,14 @@
     <div class="d-flex flex-wrap align-items-center justify-content-between mb-3">
         <div>
             <a href="{{ url_for('index') }}">← Zpět na rozcestník</a>
-            <h1 class="h3 mt-2 mb-0">AZ kvíz</h1>
+            <h1 class="h3 mt-2 mb-0 az-logo"><span class="az-logo-hex" aria-hidden="true">K</span>Kvinta kvíz</h1>
             {% if is_admin %}
             <a class="btn btn-sm btn-outline-secondary mt-2" href="{{ url_for('python.azkviz_admin_questions') }}">Upravit otázky</a>
             {% endif %}
         </div>
         <button id="start-game" type="button" class="btn btn-primary">Najít soupeře</button>
     </div>
-    <p>Hrají dva hráči. Správná odpověď ti dovolí obsadit volné pole, chybná předá tah soupeři a označí pole šedě. Šedé pole může kdykoli vybrat kterýkoli hráč; oběma se otevře stejné reakční kolo a pole získá rychlejší hráč. Vyhraje hráč, jehož souvislá skupina polí propojí všechny tři strany trojúhelníkové desky.</p>
+    <p>Hrají dva hráči. Správná odpověď ti dovolí obsadit volné pole, chybná předá tah soupeři a označí pole šedě. Šedé pole může vybrat pouze hráč, který je na tahu; potom se oběma otevře stejné reakční kolo a pole získá hráč s kratším časem. Vyhraje hráč, jehož souvislá skupina polí propojí všechny tři strany trojúhelníkové desky.</p>
     <div class="d-flex flex-wrap mb-3" aria-label="Tvoje statistiky">
         <div class="az-stat mr-4"><strong>{{ stats.wins }}</strong><br>výher</div>
         <div class="az-stat mr-4"><strong>{{ stats.losses }}</strong><br>proher</div>
@@ -53,14 +83,10 @@
         <div class="az-stat"><strong>{{ stats.played }}</strong><br>odehraných her</div>
     </div>
 
-    <section id="game-panel" class="card mb-4" hidden>
-        <div class="card-body">
-            <h2 class="h5">Souboj <span id="opponent-name"></span></h2>
-            <p id="game-status" role="status" aria-live="polite">Připojuji hru…</p>
-            <div class="text-center mb-2">
-                <span id="my-player-name" class="badge badge-success mr-2"></span>
-                <span id="opponent-player-name" class="badge badge-secondary"></span>
-            </div>
+    <section id="game-panel" class="az-game-panel mb-4" hidden>
+        <div class="az-game-body">
+            <h2 class="az-game-heading">Kvinta kvíz <span id="opponent-name"></span></h2>
+            <p id="game-status" class="az-game-status" role="status" aria-live="polite">Připojuji hru…</p>
             <div id="winner-banner" class="az-winner-banner" role="status" aria-live="assertive" hidden></div>
             <dialog id="reaction-modal" class="az-reaction-modal" aria-labelledby="reaction-title">
                 <section id="reaction-panel" class="az-reaction-panel mb-0" aria-live="polite">
@@ -73,7 +99,29 @@
                     <p id="reaction-hint" class="small mb-0">Kdo správně zareaguje rychleji, získá pole. Předčasný stisk znamená prohru.</p>
                 </section>
             </dialog>
-            <div id="game-board" class="az-board" aria-label="Herní deska"></div>
+            <div class="az-game-layout">
+                <aside class="az-player-legend" aria-label="Hráči">
+                    <div class="az-legend-player">
+                        <span class="az-player-swatch owner-a" aria-hidden="true"></span>
+                        <img id="player-a-picture" class="az-player-avatar" alt="" hidden>
+                        <span id="player-a-fallback" class="az-player-fallback" aria-hidden="true">?</span>
+                        <span class="az-player-copy">
+                            <span class="az-player-label">První hráč <strong id="player-a-turn" class="az-turn-label" hidden>HRAJE</strong></span>
+                            <span id="player-a-name" class="az-legend-name"></span>
+                        </span>
+                    </div>
+                    <div class="az-legend-player">
+                        <span class="az-player-swatch owner-b" aria-hidden="true"></span>
+                        <img id="player-b-picture" class="az-player-avatar" alt="" hidden>
+                        <span id="player-b-fallback" class="az-player-fallback" aria-hidden="true">?</span>
+                        <span class="az-player-copy">
+                            <span class="az-player-label">Druhý hráč <strong id="player-b-turn" class="az-turn-label" hidden>HRAJE</strong></span>
+                            <span id="player-b-name" class="az-legend-name"></span>
+                        </span>
+                    </div>
+                </aside>
+                <div id="game-board" class="az-board" aria-label="Herní deska"></div>
+            </div>
             <p id="feedback" class="mt-3 mb-0" role="status" aria-live="polite"></p>
             <button id="cancel-game" class="btn btn-outline-secondary btn-sm mt-3" type="button" hidden>Zrušit hledání</button>
         </div>
@@ -139,8 +187,14 @@
     const gamePanel = document.getElementById("game-panel");
     const statusText = document.getElementById("game-status");
     const opponentText = document.getElementById("opponent-name");
-    const myPlayerName = document.getElementById("my-player-name");
-    const opponentPlayerName = document.getElementById("opponent-player-name");
+    const playerAName = document.getElementById("player-a-name");
+    const playerBName = document.getElementById("player-b-name");
+    const playerAPicture = document.getElementById("player-a-picture");
+    const playerBPicture = document.getElementById("player-b-picture");
+    const playerAFallback = document.getElementById("player-a-fallback");
+    const playerBFallback = document.getElementById("player-b-fallback");
+    const playerATurn = document.getElementById("player-a-turn");
+    const playerBTurn = document.getElementById("player-b-turn");
     const boardElement = document.getElementById("game-board");
     const winnerBanner = document.getElementById("winner-banner");
     const reactionModal = document.getElementById("reaction-modal");
@@ -237,6 +291,7 @@
     }
 
     async function send(url, method, body) {
+        const requestStartedAt = performance.now();
         const response = await fetch(url, {
             method: method,
             headers: body ? {"Content-Type": "application/json"} : {},
@@ -244,6 +299,10 @@
             credentials: "same-origin"
         });
         const data = await response.json();
+        const challengeState = data.challenge || (data.game && data.game.challenge);
+        if (challengeState && Number.isFinite(challengeState.server_now_ms)) {
+            challengeState.server_now_ms += (performance.now() - requestStartedAt) / 2;
+        }
         if (!response.ok) throw new Error(data.error || "Požadavek se nepodařilo dokončit.");
         return data;
     }
@@ -264,7 +323,7 @@
                 cell.className = "az-cell" + (owner ? " owner-" + owner.toLowerCase() : "");
                 if (
                     (!owner && game.my_turn)
-                    || (neutral && game.status === "playing")
+                    || (neutral && game.status === "playing" && game.my_turn)
                 ) {
                     if (!game.challenge) cell.classList.add("available");
                 }
@@ -278,11 +337,17 @@
                 );
                 cell.disabled = (
                     (!neutral && (Boolean(owner) || !game.my_turn))
-                    || (neutral && game.status !== "playing")
+                    || (neutral && (game.status !== "playing" || !game.my_turn))
                     || Boolean(game.challenge)
                 );
                 cell.addEventListener("click", function () {
                     if (neutral) {
+                        if (
+                            !currentGame
+                            || currentGame.status !== "playing"
+                            || !currentGame.my_turn
+                            || currentGame.challenge
+                        ) return;
                         startGrayChallenge(cellIndex);
                         return;
                     }
@@ -309,16 +374,60 @@
         }
     }
 
+    function renderPlayer(nameElement, pictureElement, fallbackElement, name, picture, isMe) {
+        const displayName = name || "Čekám na hráče";
+        nameElement.textContent = (isMe ? "Ty — " : "") + displayName;
+        fallbackElement.textContent = displayName.trim().charAt(0).toLocaleUpperCase("cs") || "?";
+        let safePicture = "";
+        if (picture) {
+            try {
+                const parsedPicture = new URL(picture);
+                if (
+                    parsedPicture.protocol === "https:"
+                    && (parsedPicture.hostname === "googleusercontent.com"
+                        || parsedPicture.hostname.endsWith(".googleusercontent.com"))
+                ) {
+                    safePicture = parsedPicture.href;
+                }
+            } catch (error) {
+                console.warn("Profilovou fotku hráče se nepodařilo načíst.", error);
+            }
+        }
+        pictureElement.hidden = !safePicture;
+        fallbackElement.hidden = Boolean(safePicture);
+        if (safePicture && pictureElement.src !== safePicture) {
+            pictureElement.src = safePicture;
+        }
+        pictureElement.onerror = function () {
+            pictureElement.hidden = true;
+            fallbackElement.hidden = false;
+        };
+    }
+
     function render(game) {
         gameId = game.id;
         currentGame = game;
         if (!game.my_turn) selectedCell = null;
         gamePanel.hidden = false;
         opponentText.textContent = game.opponent_name ? "— " + game.opponent_name : "";
-        myPlayerName.textContent = "Ty: " + game.my_name;
-        myPlayerName.className = "badge mr-2 " + (game.my_color === "A" ? "badge-danger" : "badge-primary");
-        opponentPlayerName.textContent = game.opponent_name ? "Soupeř: " + game.opponent_name : "Čekám na soupeře";
-        opponentPlayerName.className = "badge " + (game.my_color === "A" ? "badge-primary" : "badge-danger");
+        const playerAIsMe = game.my_color === "A";
+        const playerBIsMe = game.my_color === "B";
+        renderPlayer(
+            playerAName, playerAPicture, playerAFallback,
+            playerAIsMe ? game.my_name : game.opponent_name,
+            game.player_a_picture, playerAIsMe
+        );
+        renderPlayer(
+            playerBName, playerBPicture, playerBFallback,
+            playerBIsMe ? game.my_name : game.opponent_name,
+            game.player_b_picture, playerBIsMe
+        );
+        const playerATurnActive = game.status === "playing" && !game.challenge
+            && (game.my_color === "A" ? game.my_turn : !game.my_turn);
+        const playerBTurnActive = game.status === "playing" && !game.challenge
+            && (game.my_color === "B" ? game.my_turn : !game.my_turn);
+        playerATurn.hidden = !playerATurnActive;
+        playerBTurn.hidden = !playerBTurnActive;
         drawBoard(game);
         if (game.challenge) {
             if (Number.isFinite(game.challenge.server_now_ms)) {
@@ -421,6 +530,7 @@
             !gameId
             || !currentGame
             || currentGame.status !== "playing"
+            || !currentGame.my_turn
             || currentGame.challenge
         ) return;
         feedback.textContent = "";
