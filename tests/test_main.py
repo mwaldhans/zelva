@@ -117,6 +117,13 @@ def test_teacher_can_play_azkviz_against_student(tmp_path: Path) -> None:
     assert 'id="winner-banner"' in page_html
     assert "game.winner_name" in page_html
     assert "questionModal.showModal()" in page_html
+    question_click_flow = page_html.split(
+        "if (currentGame.question && !questionModal.open)", 1
+    )[1].split("row.appendChild(cell)", 1)[0]
+    assert question_click_flow.index("questionModal.showModal()") < (
+        question_click_flow.index("await send(")
+    )
+    assert "polling || answerSubmitting || questionStarting" in page_html
     assert "questionModal.close()" in page_html
     assert 'id="answer-result"' in page_html
     assert "playCorrectSound()" in page_html
@@ -126,7 +133,9 @@ def test_teacher_can_play_azkviz_against_student(tmp_path: Path) -> None:
     assert "waitForQuestionClose(3000)" in page_html
     assert 'id="forfeit-game"' in page_html
     assert 'id="regular-content"' in page_html
+    assert 'id="nickname-panel"' in page_html
     assert 'id="standings"' in page_html
+    assert "nicknamePanel.hidden = lobbyView || game.status === \"playing\"" in page_html
 
     waiting = teacher.post("/python/azkviz/match")
     assert waiting.status_code == 200

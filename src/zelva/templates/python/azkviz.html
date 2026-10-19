@@ -100,7 +100,7 @@
         </div>
     </section>
     <div id="regular-content">
-    <section class="card mb-4">
+    <section id="nickname-panel" class="card mb-4">
         <div class="card-body">
             <h2 class="h5">Tvoje přezdívka</h2>
             <form method="post" action="{{ url_for('python.azkviz_nickname') }}" class="form-inline">
@@ -250,6 +250,7 @@
     const openLobbyButton = document.getElementById("open-lobby");
     const lobbyPanel = document.getElementById("lobby-panel");
     const regularContent = document.getElementById("regular-content");
+    const nicknamePanel = document.getElementById("nickname-panel");
     const flashMessages = document.getElementById("flash-messages");
     const standings = document.getElementById("standings");
     const lobbyPlayers = document.getElementById("lobby-players");
@@ -476,6 +477,17 @@
                     drawBoard(currentGame);
                     if (currentGame.question && !questionModal.open) {
                         questionStarting = true;
+                        answerOptions.querySelectorAll('input[name="az-answer"]').forEach(function (input) {
+                            input.checked = false;
+                        });
+                        const answerResult = document.getElementById("answer-result");
+                        answerResult.hidden = true;
+                        answerResult.textContent = "";
+                        answerResult.className = "az-answer-result";
+                        answerOptions.hidden = false;
+                        document.getElementById("cell-hint").hidden = false;
+                        questionModal.showModal();
+                        answerOptions.querySelector('input[name="az-answer"]').focus();
                         try {
                             const game = await send(
                                 "{{ url_for('python.azkviz_question_start', game_id=0) }}".replace("/0/question/start", "/" + gameId + "/question/start"),
@@ -484,21 +496,13 @@
                             );
                             if (game.feedback) feedback.textContent = game.feedback;
                             render(game);
-                            if (game.question && game.my_turn && !game.challenge) {
-                                questionModal.showModal();
-                                answerOptions.querySelectorAll('input[name="az-answer"]').forEach(function (input) {
-                                    input.checked = false;
-                                });
-                                const answerResult = document.getElementById("answer-result");
-                                answerResult.hidden = true;
-                                answerResult.textContent = "";
-                                answerResult.className = "az-answer-result";
-                                answerOptions.hidden = false;
-                                document.getElementById("cell-hint").hidden = false;
-                                answerOptions.querySelector('input[name="az-answer"]').focus();
+                            if (!game.question || !game.my_turn || game.challenge) {
+                                if (questionModal.open) questionModal.close();
                             }
                         } catch (error) {
+                            if (questionModal.open) questionModal.close();
                             feedback.textContent = error.message;
+                            questionStarting = false;
                             await poll();
                         } finally {
                             questionStarting = false;
@@ -558,6 +562,7 @@
         startButton.hidden = lobbyView || ["playing", "waiting"].includes(game.status);
         standings.hidden = true;
         gamePanel.hidden = lobbyView;
+        nicknamePanel.hidden = lobbyView || game.status === "playing";
         if (game.question_started_at && game.question_cell !== null) {
             selectedCell = game.question_cell;
         } else if (!game.my_turn) {
@@ -713,7 +718,7 @@
     }
 
     async function poll() {
-        if (!gameId || polling || answerSubmitting) return;
+        if (!gameId || polling || answerSubmitting || questionStarting) return;
         polling = true;
         try {
             const game = await send("{{ url_for('python.azkviz_game_state', game_id=0) }}".replace("/0", "/" + gameId), "GET");
