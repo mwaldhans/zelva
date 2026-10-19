@@ -73,8 +73,43 @@
             <a class="btn btn-sm btn-outline-secondary mt-2" href="{{ url_for('python.azkviz_admin_questions') }}">Upravit otázky</a>
             {% endif %}
         </div>
-        <button id="start-game" type="button" class="btn btn-primary">Najít soupeře</button>
+        <div>
+            <button id="open-lobby" type="button" class="btn btn-outline-primary">Lobby</button>
+            <button id="start-game" type="button" class="btn btn-primary">Hrát náhodně</button>
+        </div>
     </div>
+    <div id="flash-messages">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}
+        <div class="alert alert-{{ 'danger' if category == 'error' else 'success' }}" role="status">{{ message }}</div>
+        {% endfor %}
+    {% endwith %}
+    </div>
+    <section id="lobby-panel" class="card mb-4" hidden>
+        <div class="card-body">
+            <div class="d-flex flex-wrap align-items-center justify-content-between">
+                <h2 class="h5">Lobby – čekající hráči</h2>
+                <div>
+                    <button id="refresh-lobby" type="button" class="btn btn-sm btn-outline-secondary">Obnovit</button>
+                    <button id="wait-in-lobby" type="button" class="btn btn-sm btn-outline-primary">Čekat v lobby</button>
+                    <button id="cancel-lobby-wait" type="button" class="btn btn-sm btn-outline-secondary" hidden>Zrušit čekání</button>
+                </div>
+            </div>
+            <p id="lobby-status" role="status" aria-live="polite"></p>
+            <ul id="lobby-players" class="list-group"></ul>
+        </div>
+    </section>
+    <div id="regular-content">
+    <section class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Tvoje přezdívka</h2>
+            <form method="post" action="{{ url_for('python.azkviz_nickname') }}" class="form-inline">
+                <label for="az-nickname" class="sr-only">Přezdívka</label>
+                <input id="az-nickname" name="nickname" class="form-control mr-2 mb-2" value="{{ nickname }}" minlength="2" maxlength="24" required>
+                <button type="submit" class="btn btn-outline-primary mb-2">Uložit přezdívku</button>
+            </form>
+        </div>
+    </section>
     <p>Hrají dva hráči. Správná odpověď ti dovolí obsadit volné pole, chybná předá tah soupeři a označí pole šedě. Šedé pole může vybrat pouze hráč, který je na tahu; potom se oběma otevře stejné reakční kolo a pole získá hráč s kratším časem. Vyhraje hráč, jehož souvislá skupina polí propojí všechny tři strany trojúhelníkové desky.</p>
     <div class="d-flex flex-wrap mb-3" aria-label="Tvoje statistiky">
         <div class="az-stat mr-4"><strong>{{ stats.wins }}</strong><br>výher</div>
@@ -124,11 +159,13 @@
             </div>
             <p id="feedback" class="mt-3 mb-0" role="status" aria-live="polite"></p>
             <button id="cancel-game" class="btn btn-outline-secondary btn-sm mt-3" type="button" hidden>Zrušit hledání</button>
+            <button id="forfeit-game" class="btn btn-outline-danger btn-sm mt-3" type="button" hidden>Vzdát se</button>
         </div>
     </section>
 
     <dialog id="question-modal" class="az-question-modal" aria-labelledby="question-text">
         <div class="az-question-modal-content">
+            <p id="answer-clock" class="font-weight-bold text-danger text-center" role="timer" aria-live="polite" hidden></p>
             <h2 id="question-text" class="h5"></h2>
             <div id="answer-options" class="mb-3"></div>
             <p id="answer-result" class="az-answer-result" role="status" aria-live="assertive" hidden></p>
@@ -140,6 +177,7 @@
         </div>
     </dialog>
 
+    <div id="standings">
     {% if opponents %}
     <section class="card mb-4">
         <div class="card-body">
@@ -157,6 +195,29 @@
         </div>
     </section>
     {% endif %}
+
+    <section class="card mb-4">
+        <div class="card-body">
+            <h2 class="h5">Žebříček hráčů</h2>
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-0">
+                    <thead><tr><th>#</th><th>Hráč</th><th>Výhry</th><th>Odehráno</th></tr></thead>
+                    <tbody>
+                    {% for player in leaderboard %}
+                        <tr>
+                            <td>{{ loop.index }}</td>
+                            <td>{{ player.nickname }}</td>
+                            <td>{{ player.wins }}</td>
+                            <td>{{ player.played }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="4">Zatím zde nejsou žádné hráče.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </section>
 
     {% if history %}
     <section class="card mb-4">
@@ -179,13 +240,25 @@
         </div>
     </section>
     {% endif %}
+    </div>
+    </div>
 </main>
 
 <script>
 (function () {
     const startButton = document.getElementById("start-game");
+    const openLobbyButton = document.getElementById("open-lobby");
+    const lobbyPanel = document.getElementById("lobby-panel");
+    const regularContent = document.getElementById("regular-content");
+    const flashMessages = document.getElementById("flash-messages");
+    const standings = document.getElementById("standings");
+    const lobbyPlayers = document.getElementById("lobby-players");
+    const lobbyStatus = document.getElementById("lobby-status");
+    const refreshLobbyButton = document.getElementById("refresh-lobby");
+    const waitInLobbyButton = document.getElementById("wait-in-lobby");
     const gamePanel = document.getElementById("game-panel");
     const statusText = document.getElementById("game-status");
+    const answerClock = document.getElementById("answer-clock");
     const opponentText = document.getElementById("opponent-name");
     const playerAName = document.getElementById("player-a-name");
     const playerBName = document.getElementById("player-b-name");
@@ -206,6 +279,8 @@
     const answerOptions = document.getElementById("answer-options");
     const feedback = document.getElementById("feedback");
     const cancelButton = document.getElementById("cancel-game");
+    const cancelLobbyWaitButton = document.getElementById("cancel-lobby-wait");
+    const forfeitButton = document.getElementById("forfeit-game");
     let gameId = null;
     let selectedCell = null;
     let shownQuestion = null;
@@ -213,12 +288,50 @@
     let pollTimer = null;
     let polling = false;
     let answerSubmitting = false;
+    let questionStarting = false;
     let answerResultVisible = false;
     let audioContext = null;
     let challengeRenderTimer = null;
     let reacting = false;
     let shownChallengeFrame = -1;
     let challengeClockOffsetMs = 0;
+    let answerClockTimer = null;
+    let lastTimeoutSoundKey = null;
+    let lobbyTimer = null;
+    let lobbyLoading = false;
+    let lobbyView = false;
+
+    function updateAnswerClock() {
+        const active = currentGame
+            && currentGame.my_turn
+            && !currentGame.challenge
+            && currentGame.question_started_at;
+        answerClock.hidden = !active;
+        if (!active) {
+            if (answerClockTimer) clearInterval(answerClockTimer);
+            answerClockTimer = null;
+            return;
+        }
+
+        const deadline = Date.parse(currentGame.question_started_at)
+            + currentGame.answer_timeout_seconds * 1000;
+        const remaining = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+        const timeoutSoundKey = [
+            currentGame.id,
+            currentGame.question_started_at,
+            currentGame.question_cell
+        ].join(":");
+        if (remaining === 0 && timeoutSoundKey !== lastTimeoutSoundKey) {
+            lastTimeoutSoundKey = timeoutSoundKey;
+            playWrongSound();
+        }
+        answerClock.textContent = remaining
+            ? "Na odpověď zbývá " + remaining + " s."
+            : "Čas vypršel, uzavírám otázku…";
+        if (!answerClockTimer) {
+            answerClockTimer = setInterval(updateAnswerClock, 250);
+        }
+    }
 
     function prepareAudio() {
         const AudioContext = window.AudioContext || window.webkitAudioContext;
@@ -339,8 +452,15 @@
                     (!neutral && (Boolean(owner) || !game.my_turn))
                     || (neutral && (game.status !== "playing" || !game.my_turn))
                     || Boolean(game.challenge)
+                    || (
+                        !neutral
+                        && game.question_started_at
+                        && game.question_cell !== null
+                        && cellIndex !== game.question_cell
+                    )
                 );
-                cell.addEventListener("click", function () {
+                cell.addEventListener("click", async function () {
+                    if (questionStarting) return;
                     if (neutral) {
                         if (
                             !currentGame
@@ -351,20 +471,38 @@
                         startGrayChallenge(cellIndex);
                         return;
                     }
+                    prepareAudio();
                     selectedCell = cellIndex;
                     drawBoard(currentGame);
                     if (currentGame.question && !questionModal.open) {
-                        questionModal.showModal();
-                        answerOptions.querySelectorAll('input[name="az-answer"]').forEach(function (input) {
-                            input.checked = false;
-                        });
-                        const answerResult = document.getElementById("answer-result");
-                        answerResult.hidden = true;
-                        answerResult.textContent = "";
-                        answerResult.className = "az-answer-result";
-                        answerOptions.hidden = false;
-                        document.getElementById("cell-hint").hidden = false;
-                        answerOptions.querySelector('input[name="az-answer"]').focus();
+                        questionStarting = true;
+                        try {
+                            const game = await send(
+                                "{{ url_for('python.azkviz_question_start', game_id=0) }}".replace("/0/question/start", "/" + gameId + "/question/start"),
+                                "POST",
+                                {cell: cellIndex}
+                            );
+                            if (game.feedback) feedback.textContent = game.feedback;
+                            render(game);
+                            if (game.question && game.my_turn && !game.challenge) {
+                                questionModal.showModal();
+                                answerOptions.querySelectorAll('input[name="az-answer"]').forEach(function (input) {
+                                    input.checked = false;
+                                });
+                                const answerResult = document.getElementById("answer-result");
+                                answerResult.hidden = true;
+                                answerResult.textContent = "";
+                                answerResult.className = "az-answer-result";
+                                answerOptions.hidden = false;
+                                document.getElementById("cell-hint").hidden = false;
+                                answerOptions.querySelector('input[name="az-answer"]').focus();
+                            }
+                        } catch (error) {
+                            feedback.textContent = error.message;
+                            await poll();
+                        } finally {
+                            questionStarting = false;
+                        }
                     }
                 });
                 row.appendChild(cell);
@@ -407,8 +545,25 @@
     function render(game) {
         gameId = game.id;
         currentGame = game;
-        if (!game.my_turn) selectedCell = null;
-        gamePanel.hidden = false;
+        if (lobbyView && game.status === "playing") {
+            lobbyView = false;
+            if (lobbyTimer) clearInterval(lobbyTimer);
+            lobbyTimer = null;
+        }
+        regularContent.hidden = lobbyView;
+        flashMessages.hidden = lobbyView;
+        lobbyPanel.hidden = !lobbyView;
+        openLobbyButton.textContent = lobbyView ? "Zpět" : "Lobby";
+        openLobbyButton.hidden = game.status === "playing";
+        startButton.hidden = lobbyView || ["playing", "waiting"].includes(game.status);
+        standings.hidden = true;
+        gamePanel.hidden = lobbyView;
+        if (game.question_started_at && game.question_cell !== null) {
+            selectedCell = game.question_cell;
+        } else if (!game.my_turn) {
+            selectedCell = null;
+        }
+        updateAnswerClock();
         opponentText.textContent = game.opponent_name ? "— " + game.opponent_name : "";
         const playerAIsMe = game.my_color === "A";
         const playerBIsMe = game.my_color === "B";
@@ -445,11 +600,16 @@
             shownChallengeFrame = -1;
         }
         cancelButton.hidden = game.status !== "waiting";
+        forfeitButton.hidden = game.status !== "playing";
+        waitInLobbyButton.disabled = game.status === "waiting" || game.status === "playing";
+        waitInLobbyButton.hidden = game.status === "waiting";
+        cancelLobbyWaitButton.hidden = !lobbyView || game.status !== "waiting";
         if ((!game.my_turn || game.status !== "playing" || game.challenge) && questionModal.open) {
             questionModal.close();
         }
         if (game.status === "waiting") {
             statusText.textContent = "Hledám soupeře… Tato stránka bude průběžně kontrolovat, jestli se někdo připojil.";
+            if (lobbyView) lobbyStatus.textContent = "Čekáš na soupeře. Až se někdo připojí, hra začne automaticky.";
         } else if (game.challenge) {
             statusText.textContent = "Souboj o šedé pole! Když se obrazce shodují, stiskni mezerník.";
         } else if (game.status === "playing" && game.my_turn) {
@@ -507,7 +667,7 @@
         if (["finished", "abandoned", "cancelled"].includes(game.status)) {
             if (pollTimer) clearInterval(pollTimer);
             pollTimer = null;
-            startButton.textContent = "Zahrát znovu";
+            startButton.textContent = "Hrát náhodně";
         }
     }
 
@@ -568,12 +728,45 @@
         }
     }
 
-    startButton.addEventListener("click", async function () {
+    async function refreshLobby() {
+        if (lobbyLoading || lobbyPanel.hidden) return;
+        lobbyLoading = true;
+        try {
+            const lobby = await send("{{ url_for('python.azkviz_lobby') }}", "GET");
+            lobbyPlayers.replaceChildren();
+            if (!lobby.players.length) {
+                lobbyStatus.textContent = "Nikdo právě nečeká. Začni čekat v lobby, nebo zvol náhodnou hru.";
+                return;
+            }
+            lobbyStatus.textContent = "Vyber hráče, se kterým chceš hrát:";
+            lobby.players.forEach(function (player) {
+                const item = document.createElement("li");
+                item.className = "list-group-item d-flex align-items-center justify-content-between";
+                const name = document.createElement("span");
+                name.textContent = player.nickname;
+                const choose = document.createElement("button");
+                choose.type = "button";
+                choose.className = "btn btn-sm btn-primary";
+                choose.textContent = "Hrát";
+                choose.addEventListener("click", function () {
+                    startMatch({mode: "selected", game_id: player.game_id});
+                });
+                item.append(name, choose);
+                lobbyPlayers.appendChild(item);
+            });
+        } catch (error) {
+            lobbyStatus.textContent = error.message;
+        } finally {
+            lobbyLoading = false;
+        }
+    }
+
+    async function startMatch(options) {
         startButton.disabled = true;
         feedback.textContent = "";
         selectedCell = null;
         try {
-            const game = await send("{{ url_for('python.azkviz_match') }}", "POST");
+            const game = await send("{{ url_for('python.azkviz_match') }}", "POST", options);
             render(game);
             if (!pollTimer) {
                 pollTimer = setInterval(
@@ -581,19 +774,62 @@
                     game.challenge ? 100 : game.status === "playing" ? 250 : 2000
                 );
             }
+            if (options.mode !== "lobby" || game.status === "playing") {
+                lobbyPanel.hidden = true;
+            }
         } catch (error) {
-            gamePanel.hidden = false;
-            statusText.textContent = error.message;
+            if (lobbyView) {
+                lobbyStatus.textContent = error.message;
+            } else {
+                gamePanel.hidden = false;
+                statusText.textContent = error.message;
+            }
         } finally {
             startButton.disabled = false;
         }
+    }
+
+    startButton.addEventListener("click", function () {
+        startMatch({mode: "random"});
+    });
+    openLobbyButton.addEventListener("click", function () {
+        lobbyView = !lobbyView;
+        if (lobbyView) {
+            if (currentGame) {
+                render(currentGame);
+            } else {
+                regularContent.hidden = true;
+                flashMessages.hidden = true;
+                lobbyPanel.hidden = false;
+                openLobbyButton.textContent = "Zpět";
+                startButton.hidden = true;
+            }
+            refreshLobby();
+            if (!lobbyTimer) lobbyTimer = setInterval(refreshLobby, 2500);
+        } else {
+            if (lobbyTimer) clearInterval(lobbyTimer);
+            lobbyTimer = null;
+            lobbyPanel.hidden = true;
+            regularContent.hidden = false;
+            flashMessages.hidden = false;
+            openLobbyButton.textContent = "Lobby";
+            startButton.hidden = false;
+            if (currentGame) render(currentGame);
+        }
+    });
+    refreshLobbyButton.addEventListener("click", refreshLobby);
+    waitInLobbyButton.addEventListener("click", function () {
+        lobbyView = true;
+        startMatch({mode: "lobby"});
     });
 
     document.getElementById("close-question").addEventListener("click", function () {
         questionModal.close();
     });
     questionModal.addEventListener("close", function () {
-        selectedCell = null;
+        selectedCell = currentGame && currentGame.question_started_at
+            ? currentGame.question_cell
+            : null;
         if (currentGame) drawBoard(currentGame);
     });
     questionModal.addEventListener("cancel", function (event) {
@@ -686,10 +922,55 @@
             if (pollTimer) clearInterval(pollTimer);
             pollTimer = null;
             gamePanel.hidden = true;
-            startButton.textContent = "Najít soupeře";
+            standings.hidden = false;
+            startButton.hidden = false;
+            startButton.textContent = "Hrát náhodně";
+            waitInLobbyButton.disabled = false;
         } catch (error) {
             statusText.textContent = error.message;
             await poll();
+        }
+    });
+
+    cancelLobbyWaitButton.addEventListener("click", async function () {
+        if (!gameId) return;
+        try {
+            await send(
+                "{{ url_for('python.azkviz_cancel', game_id=0) }}".replace("/0/cancel", "/" + gameId + "/cancel"),
+                "POST"
+            );
+            if (pollTimer) clearInterval(pollTimer);
+            pollTimer = null;
+            gameId = null;
+            currentGame = null;
+            selectedCell = null;
+            gamePanel.hidden = true;
+            cancelLobbyWaitButton.hidden = true;
+            waitInLobbyButton.hidden = false;
+            waitInLobbyButton.disabled = false;
+            lobbyStatus.textContent = "Čekání bylo zrušeno.";
+            refreshLobby();
+        } catch (error) {
+            lobbyStatus.textContent = error.message;
+            await poll();
+        }
+    });
+
+    forfeitButton.addEventListener("click", async function () {
+        if (!gameId || !window.confirm("Opravdu se chceš vzdát této hry?")) return;
+        forfeitButton.disabled = true;
+        try {
+            const result = await send(
+                "{{ url_for('python.azkviz_forfeit', game_id=0) }}".replace("/0/forfeit", "/" + gameId + "/forfeit"),
+                "POST"
+            );
+            feedback.textContent = result.feedback;
+            render(result.game);
+        } catch (error) {
+            statusText.textContent = error.message;
+            await poll();
+        } finally {
+            forfeitButton.disabled = false;
         }
     });
 })();

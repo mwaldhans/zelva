@@ -2,7 +2,9 @@ from io import BytesIO
 import json
 import sqlite3
 import urllib.error
+from datetime import datetime, timedelta
 from pathlib import Path
+import pytz
 
 from zelva.app import _is_allowed_login_email, create_app
 from zelva.python_course import AZ_BOARD_SIZE, _az_connected, _az_question_payload, init_db
@@ -104,6 +106,12 @@ def test_teacher_can_play_azkviz_against_student(tmp_path: Path) -> None:
     assert 'id="player-a-turn"' in page_html
     assert "clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%)" in page_html
     assert '<dialog id="question-modal"' in page_html
+    assert page_html.index('<p id="answer-clock"') > page_html.index(
+        '<dialog id="question-modal"'
+    )
+    assert page_html.index('<p id="answer-clock"') < page_html.index(
+        '<h2 id="question-text"'
+    )
     assert '<dialog id="reaction-modal"' in page_html
     assert "reactionModal.showModal()" in page_html
     assert 'id="winner-banner"' in page_html
@@ -113,8 +121,12 @@ def test_teacher_can_play_azkviz_against_student(tmp_path: Path) -> None:
     assert 'id="answer-result"' in page_html
     assert "playCorrectSound()" in page_html
     assert "playWrongSound()" in page_html
+    assert "timeoutSoundKey !== lastTimeoutSoundKey" in page_html
     assert '"az-answer-result alert alert-danger"' in page_html
     assert "waitForQuestionClose(3000)" in page_html
+    assert 'id="forfeit-game"' in page_html
+    assert 'id="regular-content"' in page_html
+    assert 'id="standings"' in page_html
 
     waiting = teacher.post("/python/azkviz/match")
     assert waiting.status_code == 200
@@ -349,6 +361,7 @@ def test_azkviz_matches_players_and_records_winner_stats(tmp_path: Path) -> None
 
     state, correct_answer = question_answer(player_a)
     assert state["question"] is not None
+    _az_start_question(player_a, game_id, 9)
     no_cell = player_a.post(
         f"/python/azkviz/game/{game_id}/answer",
         json={"answer": correct_answer},
@@ -357,6 +370,7 @@ def test_azkviz_matches_players_and_records_winner_stats(tmp_path: Path) -> None
     assert player_a.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
 
     wrong = (correct_answer + 1) % len(state["question"]["options"])
+    _az_start_question(player_a, game_id, 9)
     result = player_a.post(
         f"/python/azkviz/game/{game_id}/answer",
         json={"answer": wrong, "cell": 9},
@@ -375,6 +389,7 @@ def test_azkviz_matches_players_and_records_winner_stats(tmp_path: Path) -> None
     for move_index, (cell, gray_cell) in enumerate(zip((0, 1, 3, 6), (8, 7, 2, 5))):
         state_b, answer_b = question_answer(player_b)
         wrong_b = (answer_b + 1) % len(state_b["question"]["options"])
+        _az_start_question(player_b, game_id, gray_cell)
         wrong_result = player_b.post(
             f"/python/azkviz/game/{game_id}/answer",
             json={"answer": wrong_b, "cell": gray_cell},
@@ -383,6 +398,7 @@ def test_azkviz_matches_players_and_records_winner_stats(tmp_path: Path) -> None
         assert wrong_result.json["game"]["board"][gray_cell] == "X"
 
         _, answer_a = question_answer(player_a)
+        _az_start_question(player_a, game_id, cell)
         result_a = player_a.post(
             f"/python/azkviz/game/{game_id}/answer",
             json={"answer": answer_a, "cell": cell},
@@ -415,6 +431,166 @@ def test_azkviz_matches_players_and_records_winner_stats(tmp_path: Path) -> None
     assert lost_game["winner_name"] == "Alice"
 
 
+def test_azkviz_question_timeout_grays_locked_cell_and_uses_prague_time(
+    tmp_path: Path,
+) -> None:
+    app = _python_app(tmp_path)
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+
+    game = player_a.post("/python/azkviz/match", json={"mode": "random"}).json
+    game_id = game["id"]
+    player_b.post("/python/azkviz/match", json={"mode": "random"})
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        created_at, updated_at = conn.execute(
+            "SELECT created_at, updated_at FROM az_games WHERE id = ?", (game_id,)
+        ).fetchone()
+    prague = datetime.now(pytz.timezone("Europe/Prague"))
+    assert datetime.fromisoformat(created_at).utcoffset() == prague.utcoffset()
+    assert datetime.fromisoformat(updated_at).utcoffset() == prague.utcoffset()
+
+    started = _az_start_question(player_a, game_id, 4)
+    assert started["question_cell"] == 4
+    assert started["answer_timeout_seconds"] == 20
+    assert datetime.fromisoformat(started["question_started_at"]).utcoffset() == (
+        prague.utcoffset()
+    )
+    cannot_switch = player_a.post(
+        f"/python/azkviz/game/{game_id}/question/start", json={"cell": 5}
+    )
+    assert cannot_switch.status_code == 409
+
+    old_start = (
+        datetime.now(pytz.timezone("Europe/Prague")) - timedelta(seconds=21)
+    ).isoformat(sep=" ", timespec="milliseconds")
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        conn.execute(
+            "UPDATE az_games SET question_started_at = ? WHERE id = ?",
+            (old_start, game_id),
+        )
+
+    expired = player_a.get(f"/python/azkviz/game/{game_id}").json
+    assert expired["board"][4] == "X"
+    assert expired["my_turn"] is False
+    assert expired["question_cell"] is None
+    assert player_b.get(f"/python/azkviz/game/{game_id}").json["my_turn"] is True
+
+
+def test_azkviz_lobby_nicknames_and_leaderboard(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+    player_a.get("/python/azkviz")
+    player_b.get("/python/azkviz")
+
+    assert player_a.post(
+        "/python/azkviz/nickname", data={"nickname": "Alpha"}
+    ).status_code == 302
+    duplicate = player_b.post(
+        "/python/azkviz/nickname", data={"nickname": "alpha"}
+    )
+    assert duplicate.status_code == 302
+    assert "už je obsazená" in player_b.get("/python/azkviz").get_data(as_text=True)
+    player_b.post("/python/azkviz/nickname", data={"nickname": "Beta"})
+
+    waiting = player_a.post(
+        "/python/azkviz/match", json={"mode": "lobby"}
+    ).json
+    lobby = player_b.get("/python/azkviz/lobby").json
+    assert lobby["players"] == [{"game_id": waiting["id"], "nickname": "Alpha"}]
+    matched = player_b.post(
+        "/python/azkviz/match",
+        json={"mode": "selected", "game_id": waiting["id"]},
+    ).json
+    assert matched["status"] == "playing"
+    assert matched["my_name"] == "Beta"
+    assert matched["opponent_name"] == "Alpha"
+
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        conn.execute(
+            "UPDATE az_games SET status = 'finished', winner_email = ? WHERE id = ?",
+            ("a@gymnzidlo.cz", waiting["id"]),
+        )
+    html = player_a.get("/python/azkviz").get_data(as_text=True)
+    assert html.index("Alpha") < html.index("Beta")
+    assert "Žebříček hráčů" in html
+
+
+def test_azkviz_player_can_forfeit_and_award_opponent_the_win(
+    tmp_path: Path,
+) -> None:
+    app = _python_app(tmp_path)
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+
+    waiting = player_a.post("/python/azkviz/match", json={"mode": "random"}).json
+    matched = player_b.post("/python/azkviz/match", json={"mode": "random"}).json
+    game_id = matched["id"]
+    assert waiting["id"] == game_id
+    assert matched["status"] == "playing"
+
+    forfeited = player_a.post(f"/python/azkviz/game/{game_id}/forfeit")
+    assert forfeited.status_code == 200
+    assert forfeited.json["game"]["status"] == "finished"
+    assert forfeited.json["game"]["winner"] == "opponent"
+    assert forfeited.json["game"]["winner_name"]
+    assert player_b.get(f"/python/azkviz/game/{game_id}").json["winner"] == "you"
+    assert player_a.post(f"/python/azkviz/game/{game_id}/forfeit").status_code == 409
+
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        stored = conn.execute(
+            """
+            SELECT status, winner_email, turn_email, current_question,
+                   challenge_active, challenge_cell, challenge_started_at,
+                   question_started_at, question_cell
+            FROM az_games WHERE id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+    assert stored == (
+        "finished", "b@gymnzidlo.cz", None, None, 0, None, None, None, None
+    )
+    assert "Prohra" in player_a.get("/python/azkviz").get_data(as_text=True)
+    assert "Výhra" in player_b.get("/python/azkviz").get_data(as_text=True)
+
+
+def test_azkviz_abandons_games_after_ten_inactive_minutes(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+    game = player_a.post("/python/azkviz/match", json={"mode": "random"}).json
+    player_b.post("/python/azkviz/match", json={"mode": "random"})
+
+    stale_time = (
+        datetime.now(pytz.timezone("Europe/Prague")) - timedelta(minutes=11)
+    ).isoformat(sep=" ", timespec="milliseconds")
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        conn.execute(
+            "UPDATE az_games SET updated_at = ? WHERE id = ?",
+            (stale_time, game["id"]),
+        )
+
+    expired = player_a.get(f"/python/azkviz/game/{game['id']}").json
+    assert expired["status"] == "abandoned"
+    replacement = player_a.post(
+        "/python/azkviz/match", json={"mode": "random"}
+    ).json
+    assert replacement["id"] != game["id"]
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        status = conn.execute(
+            "SELECT status FROM az_games WHERE id = ?", (game["id"],)
+        ).fetchone()[0]
+    assert status == "abandoned"
+
+
 def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
     python_db = tmp_path / "p.db"
     app = _python_app(tmp_path)
@@ -434,6 +610,7 @@ def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
                 "SELECT current_question FROM az_games WHERE id = ?", (game_id,)
             ).fetchone()[0]
         )
+    _az_start_question(player_a, game_id, 0)
     failed = player_a.post(
         f"/python/azkviz/game/{game_id}/answer",
         json={"answer": (question["answer"] + 1) % len(question["options"]), "cell": 0},
@@ -513,6 +690,7 @@ def test_azkviz_gray_cell_reaction_and_early_press(tmp_path: Path) -> None:
         if player_a.get(f"/python/azkviz/game/{game_id}").json["my_turn"]
         else player_b
     )
+    _az_start_question(current_turn, game_id, 1)
     missed = current_turn.post(
         f"/python/azkviz/game/{game_id}/answer",
         json={"answer": (current["answer"] + 1) % len(current["options"]), "cell": 1},
@@ -621,6 +799,7 @@ def test_azkviz_gray_cell_prevents_full_board_draw(tmp_path: Path) -> None:
             ).fetchone()[0]
         )
 
+    _az_start_question(player_a, game_id, 9)
     response = player_a.post(
         f"/python/azkviz/game/{game_id}/answer",
         json={
@@ -1251,6 +1430,15 @@ def _python_app(tmp_path: Path):
 def _login(client, email: str) -> None:
     with client.session_transaction() as session:
         session["user"] = {"sub": email, "email": email, "name": "Test"}
+
+
+def _az_start_question(client, game_id: int, cell: int):
+    response = client.post(
+        f"/python/azkviz/game/{game_id}/question/start",
+        json={"cell": cell},
+    )
+    assert response.status_code == 200
+    return response.json
 
 
 def test_hub_offers_turtle_and_python(tmp_path: Path) -> None:

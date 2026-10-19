@@ -13,7 +13,7 @@ import sys
 import tempfile
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import wraps
 from io import BytesIO
 from uuid import NAMESPACE_URL, uuid4, uuid5
@@ -31,6 +31,38 @@ AZ_BOARD_SIZE = 4
 AZ_SHAPES = ("●", "▲", "■", "◆", "★", "✚")
 AZ_SHAPE_INTERVAL_MS = 600
 AZ_REACTION_WINDOW_MS = 1200
+AZ_ANSWER_TIMEOUT_SECONDS = 20
+AZ_TIMEZONE = pytz.timezone("Europe/Prague")
+
+
+def _az_now():
+    return datetime.now(AZ_TIMEZONE)
+
+
+def _az_timestamp():
+    return _az_now().isoformat(sep=" ", timespec="milliseconds")
+
+
+def _az_abandon_stale_games(conn):
+    conn.execute(
+        """
+        UPDATE az_games
+        SET status = 'abandoned', updated_at = ?
+        WHERE status IN ('waiting', 'playing')
+          AND julianday(updated_at) < julianday('now', '-10 minutes')
+        """,
+        (_az_timestamp(),),
+    )
+
+
+def _az_question_expired(game):
+    started_at = game["question_started_at"]
+    return bool(
+        started_at
+        and _az_now()
+        >= datetime.fromisoformat(started_at).astimezone(AZ_TIMEZONE)
+        + timedelta(seconds=AZ_ANSWER_TIMEOUT_SECONDS)
+    )
 
 AZ_QUESTIONS = [
     {
@@ -315,6 +347,16 @@ def init_db(database_path):
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS az_players (
+            email TEXT PRIMARY KEY,
+            nickname TEXT NOT NULL
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_az_players_nickname
+        ON az_players(nickname COLLATE NOCASE)
+    """)
     try:
         conn.execute("ALTER TABLE az_games ADD COLUMN current_question TEXT")
     except sqlite3.OperationalError:
@@ -328,6 +370,8 @@ def init_db(database_path):
         ("challenge_active", "INTEGER NOT NULL DEFAULT 0"),
         ("player_a_picture", "TEXT"),
         ("player_b_picture", "TEXT"),
+        ("question_started_at", "TEXT"),
+        ("question_cell", "INTEGER"),
     ):
         try:
             conn.execute(f"ALTER TABLE az_games ADD COLUMN {column} {definition}")
@@ -408,10 +452,10 @@ def init_db(database_path):
             conn.execute(
                 """
                 UPDATE az_games
-                SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
+                SET status = 'abandoned', updated_at = ?
                 WHERE id = ?
                 """,
-                (game["id"],),
+                (_az_timestamp(), game["id"]),
             )
     conn.commit()
     conn.close()
@@ -487,6 +531,48 @@ def _az_player_required():
     return None
 
 
+def _az_ensure_player(conn, email, default_name):
+    player = conn.execute(
+        "SELECT nickname FROM az_players WHERE email = ?", (email,)
+    ).fetchone()
+    if player:
+        nickname = player["nickname"]
+        _az_apply_player_nickname(conn, email, nickname)
+        return nickname
+
+    base = " ".join((default_name or "").split())
+    if not base or base.lower() == email.lower():
+        base = email.split("@", 1)[0]
+    base = base[:24].strip() or "Hráč"
+    nickname = base
+    suffix = 2
+    while conn.execute(
+        "SELECT 1 FROM az_players WHERE nickname = ? COLLATE NOCASE",
+        (nickname,),
+    ).fetchone():
+        suffix_text = f" ({suffix})"
+        nickname = base[: 24 - len(suffix_text)].rstrip() + suffix_text
+        suffix += 1
+
+    conn.execute(
+        "INSERT INTO az_players (email, nickname) VALUES (?, ?)",
+        (email, nickname),
+    )
+    _az_apply_player_nickname(conn, email, nickname)
+    return nickname
+
+
+def _az_apply_player_nickname(conn, email, nickname):
+    conn.execute(
+        "UPDATE az_games SET player_a_name = ? WHERE player_a_email = ?",
+        (nickname, email),
+    )
+    conn.execute(
+        "UPDATE az_games SET player_b_name = ? WHERE player_b_email = ?",
+        (nickname, email),
+    )
+
+
 def _az_admin_redirect():
     email = session.get("username", "").strip().lower()
     admin_email = (current_app.config.get("ADMIN_EMAIL") or "").strip().lower()
@@ -525,6 +611,52 @@ def _az_next_question(conn, current_question=None):
         if current_question is None or row["id"] != current_question.get("id")
     ]
     return _az_question_payload(random.choice(available or rows))
+
+
+def _az_expire_question(conn, game):
+    if (
+        game["status"] != "playing"
+        or game["challenge_active"]
+        or game["question_cell"] is None
+        or not _az_question_expired(game)
+    ):
+        return game, None
+
+    board = json.loads(game["board"])
+    cell = game["question_cell"]
+    if not 0 <= cell < len(board) or board[cell] is not None:
+        raise RuntimeError("Pole přiřazené k otázce už není volné.")
+
+    board[cell] = "X"
+    next_turn = (
+        game["player_b_email"]
+        if game["turn_email"] == game["player_a_email"]
+        else game["player_a_email"]
+    )
+    current_question = (
+        json.loads(game["current_question"]) if game["current_question"] else None
+    )
+    next_question = _az_next_question(conn, current_question)
+    conn.execute(
+        """
+        UPDATE az_games
+        SET board = ?, turn_email = ?, current_question = ?,
+            question_index = NULL, winner_email = NULL,
+            question_started_at = NULL, question_cell = NULL, updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            json.dumps(board, ensure_ascii=False),
+            next_turn,
+            json.dumps(next_question, ensure_ascii=False),
+            _az_timestamp(),
+            game["id"],
+        ),
+    )
+    updated_game = conn.execute(
+        "SELECT * FROM az_games WHERE id = ?", (game["id"],)
+    ).fetchone()
+    return updated_game, "Čas na odpověď vypršel. Pole zešedlo a hraje soupeř."
 
 
 def _az_connected(board, email):
@@ -644,7 +776,7 @@ def _az_finish_challenge(conn, game, reactions):
         UPDATE az_games
         SET board = ?, status = ?, turn_email = ?, current_question = ?,
             question_index = NULL, winner_email = ?, challenge_active = 0,
-            updated_at = CURRENT_TIMESTAMP
+            question_started_at = NULL, question_cell = NULL, updated_at = ?
         WHERE id = ?
         """,
         (
@@ -653,6 +785,7 @@ def _az_finish_challenge(conn, game, reactions):
             next_turn,
             json.dumps(next_question, ensure_ascii=False) if next_question else None,
             winner_email,
+            _az_timestamp(),
             game["id"],
         ),
     )
@@ -712,6 +845,9 @@ def _az_game_view(game, email):
         ),
         "challenge": _az_challenge_view(game, email),
         "question": question,
+        "question_started_at": game["question_started_at"],
+        "question_cell": game["question_cell"],
+        "answer_timeout_seconds": AZ_ANSWER_TIMEOUT_SECONDS,
     }
 
 
@@ -721,14 +857,42 @@ def azkviz():
     email = session["username"]
     conn = get_db_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        nickname = _az_ensure_player(
+            conn, email, (session.get("user") or {}).get("name")
+        )
+        historical_players = conn.execute(
+            """
+            SELECT player_a_email AS email, player_a_name AS name
+            FROM az_games
+            UNION
+            SELECT player_b_email AS email, player_b_name AS name
+            FROM az_games WHERE player_b_email IS NOT NULL
+            """
+        ).fetchall()
+        for player in historical_players:
+            _az_ensure_player(conn, player["email"], player["name"])
+        conn.commit()
         games = conn.execute(
             """
             SELECT * FROM az_games
             WHERE status = 'finished'
               AND (player_a_email = ? OR player_b_email = ?)
-            ORDER BY updated_at DESC, id DESC
+            ORDER BY julianday(updated_at) DESC, id DESC
             """,
             (email, email),
+        ).fetchall()
+        leaderboard = conn.execute(
+            """
+            SELECT p.nickname,
+                (SELECT COUNT(*) FROM az_games g
+                 WHERE g.status = 'finished' AND g.winner_email = p.email) AS wins,
+                (SELECT COUNT(*) FROM az_games g
+                 WHERE g.status = 'finished'
+                   AND (g.player_a_email = p.email OR g.player_b_email = p.email)) AS played
+            FROM az_players p
+            ORDER BY wins DESC, played DESC, p.nickname COLLATE NOCASE
+            """
         ).fetchall()
     finally:
         conn.close()
@@ -766,8 +930,56 @@ def azkviz():
         stats={"wins": wins, "losses": losses, "draws": draws, "played": len(games)},
         opponents=sorted(opponents.values(), key=lambda item: item["name"].lower()),
         history=history[:20],
+        nickname=nickname,
+        leaderboard=leaderboard,
         is_admin=email == (current_app.config.get("ADMIN_EMAIL") or "").strip().lower(),
     )
+
+
+@bp.route("/azkviz/nickname", methods=["POST"])
+@login_required
+def azkviz_nickname():
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+
+    email = session["username"]
+    nickname = " ".join(request.form.get("nickname", "").split())
+    if not 2 <= len(nickname) <= 24 or any(ord(char) < 32 for char in nickname):
+        flash("Přezdívka musí mít 2 až 24 znaků.", "error")
+        return redirect(url_for("python.azkviz"))
+
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        current_nickname = _az_ensure_player(
+            conn, email, (session.get("user") or {}).get("name")
+        )
+        collision = conn.execute(
+            """
+            SELECT 1 FROM az_players
+            WHERE nickname = ? COLLATE NOCASE AND email != ?
+            """,
+            (nickname, email),
+        ).fetchone()
+        if collision:
+            conn.rollback()
+            flash("Tato přezdívka už je obsazená.", "error")
+            return redirect(url_for("python.azkviz"))
+        conn.execute(
+            "UPDATE az_players SET nickname = ? WHERE email = ?",
+            (nickname, email),
+        )
+        _az_apply_player_nickname(conn, email, nickname)
+        conn.commit()
+        if nickname != current_nickname:
+            flash("Přezdívka byla změněna.", "success")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+    return redirect(url_for("python.azkviz"))
 
 
 @bp.route("/admin/azkviz/questions", methods=["GET", "POST"])
@@ -1079,19 +1291,23 @@ def azkviz_match():
     if denied:
         return jsonify(denied[0]), denied[1]
 
+    data = request.get_json(silent=True)
+    mode = data.get("mode", "random") if isinstance(data, dict) else "random"
+    selected_game_id = data.get("game_id") if isinstance(data, dict) else None
+    if mode not in ("lobby", "random", "selected"):
+        return jsonify({"error": "Neznámý způsob hledání soupeře."}), 400
+    if mode == "selected" and type(selected_game_id) is not int:
+        return jsonify({"error": "Vybraný hráč nebyl nalezen."}), 400
+
     email = session["username"]
     user = session.get("user") or {}
-    name = user.get("name") or email
     picture = user.get("picture") or None
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
-            """
-            UPDATE az_games SET status = 'abandoned', updated_at = CURRENT_TIMESTAMP
-            WHERE status IN ('waiting', 'playing')
-              AND updated_at < datetime('now', '-30 minutes')
-            """
+        _az_abandon_stale_games(conn)
+        name = _az_ensure_player(
+            conn, email, (session.get("user") or {}).get("name")
         )
         game = conn.execute(
             """
@@ -1103,52 +1319,124 @@ def azkviz_match():
             (email, email),
         ).fetchone()
 
-        if game is None:
+        if game and game["status"] == "playing":
+            conn.commit()
+            return jsonify(_az_game_view(game, email))
+        if mode == "lobby" and game:
+            conn.commit()
+            return jsonify(_az_game_view(game, email))
+
+        selected_game = None
+        if mode == "selected":
+            selected_game = conn.execute(
+                """
+                SELECT * FROM az_games
+                WHERE id = ? AND status = 'waiting' AND player_a_email <> ?
+                """,
+                (selected_game_id, email),
+            ).fetchone()
+            if not selected_game:
+                conn.rollback()
+                return jsonify({"error": "Tento hráč už na soupeře nečeká."}), 409
+
+        if game:
+            conn.execute(
+                """
+                UPDATE az_games SET status = 'cancelled', updated_at = ?
+                WHERE id = ? AND status = 'waiting'
+                """,
+                (_az_timestamp(), game["id"]),
+            )
+
+        if mode == "selected":
+            game = selected_game
+        elif mode == "random":
             game = conn.execute(
                 """
                 SELECT * FROM az_games
                 WHERE status = 'waiting' AND player_a_email <> ?
-                ORDER BY created_at, id LIMIT 1
+                ORDER BY RANDOM() LIMIT 1
                 """,
                 (email,),
             ).fetchone()
-            if game:
-                try:
-                    question = _az_next_question(conn)
-                except RuntimeError as exc:
-                    conn.rollback()
-                    return jsonify({"error": str(exc)}), 409
-                conn.execute(
-                    """
-                    UPDATE az_games
-                    SET player_b_email = ?, player_b_name = ?, player_b_picture = ?,
-                        status = 'playing',
-                        turn_email = player_a_email, current_question = ?,
-                        question_index = ?, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = ? AND status = 'waiting'
-                    """,
-                    (
-                        email, name, picture, json.dumps(question, ensure_ascii=False),
-                        None, game["id"],
-                    ),
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO az_games
-                        (player_a_email, player_a_name, player_a_picture, status,
-                         turn_email, board, question_index)
-                    VALUES (?, ?, ?, 'waiting', NULL, ?, NULL)
-                    """,
-                    (
-                        email, name, picture,
-                        json.dumps([None] * (AZ_BOARD_SIZE * (AZ_BOARD_SIZE + 1) // 2)),
-                    ),
-                )
+        if game:
+            try:
+                question = _az_next_question(conn)
+            except RuntimeError as exc:
+                conn.rollback()
+                return jsonify({"error": str(exc)}), 409
+            conn.execute(
+                """
+                UPDATE az_games
+                SET player_b_email = ?, player_b_name = ?, player_b_picture = ?,
+                    status = 'playing', turn_email = player_a_email,
+                    current_question = ?,
+                    question_index = NULL, question_started_at = NULL,
+                    question_cell = NULL, updated_at = ?
+                WHERE id = ? AND status = 'waiting'
+                """,
+                (
+                    email, name, picture, json.dumps(question, ensure_ascii=False),
+                    _az_timestamp(), game["id"],
+                ),
+            )
+            game_id = game["id"]
+        else:
+            conn.execute(
+                """
+                INSERT INTO az_games
+                    (player_a_email, player_a_name, player_a_picture, status,
+                     turn_email, board, question_index, created_at, updated_at)
+                VALUES (?, ?, ?, 'waiting', NULL, ?, NULL, ?, ?)
+                """,
+                (
+                    email, name, picture,
+                    json.dumps([None] * (AZ_BOARD_SIZE * (AZ_BOARD_SIZE + 1) // 2)),
+                    _az_timestamp(), _az_timestamp(),
+                ),
+            )
+            game_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.commit()
-        game_id = game["id"] if game else conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
         return jsonify(_az_game_view(game, email))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+@bp.route("/azkviz/lobby")
+@login_required
+def azkviz_lobby():
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
+        _az_ensure_player(conn, email, (session.get("user") or {}).get("name"))
+        waiting_players = conn.execute(
+            """
+            SELECT g.id AS game_id,
+                   COALESCE(p.nickname, g.player_a_name) AS nickname
+            FROM az_games g
+            LEFT JOIN az_players p ON p.email = g.player_a_email
+            WHERE g.status = 'waiting' AND g.player_a_email <> ?
+            ORDER BY julianday(g.created_at), g.id
+            """,
+            (email,),
+        ).fetchall()
+        conn.commit()
+        return jsonify({
+            "players": [
+                {"game_id": row["game_id"], "nickname": row["nickname"]}
+                for row in waiting_players
+            ]
+        })
     except Exception:
         conn.rollback()
         raise
@@ -1167,6 +1455,7 @@ def azkviz_game_state(game_id):
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
         game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
         if not game:
             conn.rollback()
@@ -1175,6 +1464,8 @@ def azkviz_game_state(game_id):
             conn.rollback()
             return jsonify({"error": "K této hře nemáte přístup."}), 403
         feedback = None
+        if game["status"] == "playing" and not game["challenge_active"]:
+            game, feedback = _az_expire_question(conn, game)
         if game["challenge_active"]:
             reactions = json.loads(game["challenge_reactions"] or "{}")
             challenge_ended = (
@@ -1194,6 +1485,76 @@ def azkviz_game_state(game_id):
         conn.close()
 
 
+@bp.route("/azkviz/game/<int:game_id>/question/start", methods=["POST"])
+@login_required
+def azkviz_question_start(game_id):
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+    data = request.get_json()
+    cell = data.get("cell") if isinstance(data, dict) else None
+    if type(cell) is not int:
+        return jsonify({"error": "Vyber volné pole."}), 400
+
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            conn.rollback()
+            return jsonify({"error": "Hra nebyla nalezena."}), 404
+        if email not in (game["player_a_email"], game["player_b_email"]):
+            conn.rollback()
+            return jsonify({"error": "K této hře nemáte přístup."}), 403
+        if game["status"] != "playing" or game["turn_email"] != email:
+            conn.rollback()
+            return jsonify({"error": "Teď nejste na tahu."}), 409
+        if game["challenge_active"]:
+            conn.rollback()
+            return jsonify({"error": "Během souboje o šedé pole nelze otevřít otázku."}), 409
+        if not game["current_question"] and game["question_index"] is None:
+            conn.rollback()
+            return jsonify({"error": "Pro tento tah není připravena otázka."}), 409
+
+        game, feedback = _az_expire_question(conn, game)
+        if feedback:
+            conn.commit()
+            response = _az_game_view(game, email)
+            response["feedback"] = feedback
+            return jsonify(response)
+
+        board = json.loads(game["board"])
+        if not 0 <= cell < len(board) or board[cell] is not None:
+            conn.rollback()
+            return jsonify({"error": "Toto pole už není volné."}), 409
+        if (
+            game["question_started_at"] is not None
+            and game["question_cell"] != cell
+        ):
+            conn.rollback()
+            return jsonify({"error": "Po zobrazení otázky už pole nelze změnit."}), 409
+
+        started_at = game["question_started_at"] or _az_timestamp()
+        conn.execute(
+            """
+            UPDATE az_games
+            SET question_started_at = ?, question_cell = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (started_at, cell, _az_timestamp(), game_id),
+        )
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        conn.commit()
+        return jsonify(_az_game_view(game, email))
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 @bp.route("/azkviz/game/<int:game_id>/challenge", methods=["POST"])
 @login_required
 def azkviz_start_challenge(game_id):
@@ -1209,6 +1570,7 @@ def azkviz_start_challenge(game_id):
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
         game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
         if not game:
             conn.rollback()
@@ -1238,7 +1600,7 @@ def azkviz_start_challenge(game_id):
             SET challenge_cell = ?, challenge_started_at = ?,
                 challenge_target_ms = ?, challenge_frames = ?,
                 challenge_reactions = '{}', challenge_active = 1,
-                updated_at = CURRENT_TIMESTAMP
+                updated_at = ?
             WHERE id = ?
             """,
             (
@@ -1246,6 +1608,7 @@ def azkviz_start_challenge(game_id):
                 challenge["started_at"],
                 challenge["target_ms"],
                 json.dumps(challenge["frames"], ensure_ascii=False),
+                _az_timestamp(),
                 game_id,
             ),
         )
@@ -1270,6 +1633,7 @@ def azkviz_challenge_react(game_id):
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
         game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
         if not game:
             conn.rollback()
@@ -1350,12 +1714,14 @@ def azkviz_cancel(game_id):
 
     conn = get_db_connection()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
         result = conn.execute(
             """
-            UPDATE az_games SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+            UPDATE az_games SET status = 'cancelled', updated_at = ?
             WHERE id = ? AND player_a_email = ? AND status = 'waiting'
             """,
-            (game_id, session["username"]),
+            (_az_timestamp(), game_id, session["username"]),
         )
         conn.commit()
     finally:
@@ -1363,6 +1729,60 @@ def azkviz_cancel(game_id):
     if result.rowcount != 1:
         return jsonify({"error": "Čekající hru už nelze zrušit."}), 409
     return jsonify({"status": "cancelled"})
+
+
+@bp.route("/azkviz/game/<int:game_id>/forfeit", methods=["POST"])
+@login_required
+def azkviz_forfeit(game_id):
+    denied = _az_player_required()
+    if denied:
+        return jsonify(denied[0]), denied[1]
+
+    email = session["username"]
+    conn = get_db_connection()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        if not game:
+            conn.rollback()
+            return jsonify({"error": "Hra nebyla nalezena."}), 404
+        if email not in (game["player_a_email"], game["player_b_email"]):
+            conn.rollback()
+            return jsonify({"error": "K této hře nemáte přístup."}), 403
+        if game["status"] != "playing":
+            conn.rollback()
+            return jsonify({"error": "Vzdát lze pouze probíhající hru."}), 409
+
+        winner_email = (
+            game["player_b_email"]
+            if email == game["player_a_email"]
+            else game["player_a_email"]
+        )
+        conn.execute(
+            """
+            UPDATE az_games
+            SET status = 'finished', winner_email = ?, turn_email = NULL,
+                current_question = NULL, question_index = NULL,
+                challenge_active = 0, challenge_cell = NULL,
+                challenge_started_at = NULL, challenge_target_ms = NULL,
+                challenge_frames = NULL, challenge_reactions = '{}',
+                question_started_at = NULL, question_cell = NULL, updated_at = ?
+            WHERE id = ? AND status = 'playing'
+            """,
+            (winner_email, _az_timestamp(), game_id),
+        )
+        game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
+        conn.commit()
+        return jsonify({
+            "game": _az_game_view(game, email),
+            "feedback": "Vzdal/a ses hry. Vyhrál soupeř.",
+        })
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 @bp.route("/azkviz/game/<int:game_id>/answer", methods=["POST"])
@@ -1379,6 +1799,7 @@ def azkviz_answer(game_id):
     conn = get_db_connection()
     try:
         conn.execute("BEGIN IMMEDIATE")
+        _az_abandon_stale_games(conn)
         game = conn.execute("SELECT * FROM az_games WHERE id = ?", (game_id,)).fetchone()
         if not game:
             conn.rollback()
@@ -1392,6 +1813,18 @@ def azkviz_answer(game_id):
         if game["challenge_active"]:
             conn.rollback()
             return jsonify({"error": "Během souboje o šedé pole nelze odpovídat na otázku."}), 409
+
+        game, timeout_feedback = _az_expire_question(conn, game)
+        if timeout_feedback:
+            conn.commit()
+            return jsonify({
+                "correct": False,
+                "feedback": timeout_feedback,
+                "game": _az_game_view(game, email),
+            })
+        if game["question_started_at"] is None or game["question_cell"] is None:
+            conn.rollback()
+            return jsonify({"error": "Nejdřív vyberte pole a otevřete otázku."}), 409
 
         question = (
             json.loads(game["current_question"])
@@ -1415,6 +1848,9 @@ def azkviz_answer(game_id):
         if board[cell] is not None:
             conn.rollback()
             return jsonify({"error": "Toto pole už je obsazené."}), 409
+        if cell != game["question_cell"]:
+            conn.rollback()
+            return jsonify({"error": "Odpovězte na otázku pro právě vybrané pole."}), 409
 
         if correct:
             board[cell] = email
@@ -1443,14 +1879,14 @@ def azkviz_answer(game_id):
             """
             UPDATE az_games
             SET board = ?, status = ?, turn_email = ?, current_question = ?,
-                question_index = NULL,
-                winner_email = ?, updated_at = CURRENT_TIMESTAMP
+                question_index = NULL, question_started_at = NULL, question_cell = NULL,
+                winner_email = ?, updated_at = ?
             WHERE id = ?
             """,
             (
                 json.dumps(board, ensure_ascii=False), status, turn_email,
                 json.dumps(next_question, ensure_ascii=False) if next_question else None,
-                winner_email, game_id,
+                winner_email, _az_timestamp(), game_id,
             ),
         )
         conn.commit()

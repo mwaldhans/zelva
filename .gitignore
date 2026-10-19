@@ -6,4 +6,5 @@ __pycache__/
 .env
 src/instance/
 *.db
+/src/instance/zelva.db
 src/zelva/wsgi.py
