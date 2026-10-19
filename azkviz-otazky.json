@@ -1958,8 +1958,8 @@
 },
 {
 "id": 280,
-"question": "Která funkce v modulu datetime vrací aktuální datum a čas?",
-"options": ["datetime.now()", "datetime.today()", "datetime.current()", "datetime.get()"],
+"question": "Který zápis vrátí aktuální datum a čas v časovém pásmu Prahy?",
+"options": ["datetime.now(ZoneInfo('Europe/Prague'))", "datetime.now()", "datetime.utcnow()", "time.timezone"],
 "answer": 0,
 "active": true
 },
