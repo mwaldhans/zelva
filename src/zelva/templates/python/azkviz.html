@@ -21,6 +21,19 @@
         .az-player-avatar { object-fit: cover; background: #e1e6ea; }
         .az-player-fallback { display: grid; place-items: center; background: #e1e6ea; color: #44515c; font-weight: 800; }
         .az-player-fallback[hidden], .az-player-avatar[hidden] { display: none; }
+        .az-lobby-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .75rem; padding: 0; list-style: none; }
+        .az-lobby-card { display: flex; flex-direction: column; align-items: center; gap: .55rem; padding: .85rem; border: 1px solid #e2e8f0; border-radius: .85rem; background: linear-gradient(155deg, #fff 15%, #f2f7fb 100%); box-shadow: 0 .5rem 1.25rem rgba(27, 55, 77, .08); text-align: center; transition: transform .16s, box-shadow .16s; }
+        .az-lobby-card:hover { transform: translateY(-2px); box-shadow: 0 .8rem 1.6rem rgba(27, 55, 77, .13); }
+        .az-lobby-profile { display: flex; flex-direction: column; align-items: center; gap: .35rem; }
+        .az-lobby-avatar, .az-lobby-fallback { width: 3.25rem; height: 3.25rem; border: 2px solid #fff; box-shadow: 0 0 0 2px #dce8ef, 0 .25rem .75rem rgba(27, 55, 77, .12); }
+        .az-lobby-fallback { font-size: 1.1rem; }
+        .az-lobby-name { color: #253746; font-size: 1.1rem; font-weight: 800; }
+        .az-lobby-stats { display: flex; justify-content: center; gap: .4rem; width: 100%; }
+        .az-lobby-stat { flex: 1; padding: .3rem .35rem; border-radius: .55rem; background: #edf3f7; color: #536575; font-size: .76rem; }
+        .az-lobby-stat strong { display: block; color: #253746; font-size: .95rem; }
+        .az-lobby-card .btn { min-width: 6rem; padding: .25rem .8rem; border-radius: 2rem; font-weight: 700; }
+        @media (max-width: 700px) { .az-lobby-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; } }
+        @media (max-width: 420px) { .az-lobby-grid { grid-template-columns: minmax(0, 1fr); } }
         .az-player-copy { display: flex; flex-direction: column; line-height: 1.25; }
         .az-player-label { color: #77818a; font-size: .78rem; }
         .az-legend-name { color: #343d46; font-size: .95rem; font-weight: 700; }
@@ -96,7 +109,7 @@
                 </div>
             </div>
             <p id="lobby-status" role="status" aria-live="polite"></p>
-            <ul id="lobby-players" class="list-group"></ul>
+            <ul id="lobby-players" class="az-lobby-grid"></ul>
         </div>
     </section>
     <div id="regular-content">
@@ -516,11 +529,7 @@
         }
     }
 
-    function renderPlayer(nameElement, pictureElement, fallbackElement, name, picture, isMe) {
-        const displayName = name || "Čekám na hráče";
-        nameElement.textContent = (isMe ? "Ty — " : "") + displayName;
-        fallbackElement.textContent = displayName.trim().charAt(0).toLocaleUpperCase("cs") || "?";
-        let safePicture = "";
+    function safePlayerPicture(picture) {
         if (picture) {
             try {
                 const parsedPicture = new URL(picture);
@@ -529,12 +538,20 @@
                     && (parsedPicture.hostname === "googleusercontent.com"
                         || parsedPicture.hostname.endsWith(".googleusercontent.com"))
                 ) {
-                    safePicture = parsedPicture.href;
+                    return parsedPicture.href;
                 }
             } catch (error) {
                 console.warn("Profilovou fotku hráče se nepodařilo načíst.", error);
             }
         }
+        return "";
+    }
+
+    function renderPlayer(nameElement, pictureElement, fallbackElement, name, picture, isMe) {
+        const displayName = name || "Čekám na hráče";
+        nameElement.textContent = (isMe ? "Ty — " : "") + displayName;
+        fallbackElement.textContent = displayName.trim().charAt(0).toLocaleUpperCase("cs") || "?";
+        const safePicture = safePlayerPicture(picture);
         pictureElement.hidden = !safePicture;
         fallbackElement.hidden = Boolean(safePicture);
         if (safePicture && pictureElement.src !== safePicture) {
@@ -746,9 +763,40 @@
             lobbyStatus.textContent = "Vyber hráče, se kterým chceš hrát:";
             lobby.players.forEach(function (player) {
                 const item = document.createElement("li");
-                item.className = "list-group-item d-flex align-items-center justify-content-between";
+                item.className = "az-lobby-card";
+                const profile = document.createElement("div");
+                profile.className = "az-lobby-profile";
+                const pictureUrl = safePlayerPicture(player.picture);
+                const avatar = document.createElement("img");
+                avatar.className = "az-player-avatar az-lobby-avatar";
+                avatar.alt = "";
+                avatar.hidden = !pictureUrl;
+                if (pictureUrl) avatar.src = pictureUrl;
+                const fallback = document.createElement("span");
+                fallback.className = "az-player-fallback az-lobby-fallback";
+                fallback.textContent = player.nickname.trim().charAt(0).toLocaleUpperCase("cs") || "?";
+                fallback.hidden = Boolean(pictureUrl);
+                avatar.onerror = function () {
+                    avatar.hidden = true;
+                    fallback.hidden = false;
+                };
                 const name = document.createElement("span");
+                name.className = "az-lobby-name";
                 name.textContent = player.nickname;
+                profile.append(avatar, fallback, name);
+                const stats = document.createElement("div");
+                stats.className = "az-lobby-stats";
+                [
+                    {label: "Odehráno", value: player.games},
+                    {label: "Výhry", value: player.wins}
+                ].forEach(function (stat) {
+                    const counter = document.createElement("div");
+                    counter.className = "az-lobby-stat";
+                    const value = document.createElement("strong");
+                    value.textContent = String(stat.value);
+                    counter.append(value, document.createTextNode(stat.label));
+                    stats.appendChild(counter);
+                });
                 const choose = document.createElement("button");
                 choose.type = "button";
                 choose.className = "btn btn-sm btn-primary";
@@ -756,7 +804,7 @@
                 choose.addEventListener("click", function () {
                     startMatch({mode: "selected", game_id: player.game_id});
                 });
-                item.append(name, choose);
+                item.append(profile, stats, choose);
                 lobbyPlayers.appendChild(item);
             });
         } catch (error) {

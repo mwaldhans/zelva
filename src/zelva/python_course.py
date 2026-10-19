@@ -1422,7 +1422,15 @@ def azkviz_lobby():
         waiting_players = conn.execute(
             """
             SELECT g.id AS game_id,
-                   COALESCE(p.nickname, g.player_a_name) AS nickname
+                   COALESCE(p.nickname, g.player_a_name) AS nickname,
+                   g.player_a_picture AS picture,
+                   (SELECT COUNT(*) FROM az_games stats
+                    WHERE stats.status = 'finished'
+                      AND (stats.player_a_email = g.player_a_email
+                           OR stats.player_b_email = g.player_a_email)) AS games,
+                   (SELECT COUNT(*) FROM az_games stats
+                    WHERE stats.status = 'finished'
+                      AND stats.winner_email = g.player_a_email) AS wins
             FROM az_games g
             LEFT JOIN az_players p ON p.email = g.player_a_email
             WHERE g.status = 'waiting' AND g.player_a_email <> ?
@@ -1433,7 +1441,13 @@ def azkviz_lobby():
         conn.commit()
         return jsonify({
             "players": [
-                {"game_id": row["game_id"], "nickname": row["nickname"]}
+                {
+                    "game_id": row["game_id"],
+                    "nickname": row["nickname"],
+                    "picture": row["picture"],
+                    "games": row["games"],
+                    "wins": row["wins"],
+                }
                 for row in waiting_players
             ]
         })

@@ -506,11 +506,40 @@ def test_azkviz_lobby_nicknames_and_leaderboard(tmp_path: Path) -> None:
     assert "už je obsazená" in player_b.get("/python/azkviz").get_data(as_text=True)
     player_b.post("/python/azkviz/nickname", data={"nickname": "Beta"})
 
+    with player_a.session_transaction() as session:
+        session["user"] = {
+            **session["user"],
+            "picture": "https://lh3.googleusercontent.com/alpha-photo",
+        }
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        conn.executemany(
+            """
+            INSERT INTO az_games
+                (player_a_email, player_a_name, player_b_email, player_b_name,
+                 status, turn_email, board, winner_email)
+            VALUES (?, 'Alpha', ?, 'Opponent', 'finished', NULL, ?, ?)
+            """,
+            [
+                ("a@gymnzidlo.cz", "c@gymnzidlo.cz", json.dumps([None] * 10), "a@gymnzidlo.cz"),
+                ("d@gymnzidlo.cz", "a@gymnzidlo.cz", json.dumps([None] * 10), "d@gymnzidlo.cz"),
+            ],
+        )
     waiting = player_a.post(
         "/python/azkviz/match", json={"mode": "lobby"}
     ).json
     lobby = player_b.get("/python/azkviz/lobby").json
-    assert lobby["players"] == [{"game_id": waiting["id"], "nickname": "Alpha"}]
+    assert lobby["players"] == [{
+        "game_id": waiting["id"],
+        "nickname": "Alpha",
+        "picture": "https://lh3.googleusercontent.com/alpha-photo",
+        "games": 2,
+        "wins": 1,
+    }]
+    page_html = player_b.get("/python/azkviz").get_data(as_text=True)
+    assert "az-lobby-avatar" in page_html
+    assert "safePlayerPicture(player.picture)" in page_html
+    assert 'label: "Odehráno"' in page_html
+    assert 'label: "Výhry"' in page_html
     matched = player_b.post(
         "/python/azkviz/match",
         json={"mode": "selected", "game_id": waiting["id"]},
