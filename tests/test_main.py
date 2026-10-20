@@ -1024,6 +1024,64 @@ def test_admin_can_delete_all_azkviz_questions(tmp_path: Path) -> None:
     assert player_a.post("/python/azkviz/match").status_code == 200
     assert player_b.post("/python/azkviz/match").status_code == 409
 
+
+def test_azkviz_questions_can_be_filtered_by_category(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    admin = app.test_client()
+    player_a = app.test_client()
+    player_b = app.test_client()
+    _login(admin, app.config["ADMIN_EMAIL"])
+    _login(player_a, "a@gymnzidlo.cz")
+    _login(player_b, "b@gymnzidlo.cz")
+    editor_url = "/python/admin/azkviz/questions"
+
+    admin.post(editor_url, data={"action": "delete_all"})
+    for question, category in (
+        ("Otázka z Pythonu?", "Python"),
+        ("Otázka z matematiky?", "Matematika"),
+    ):
+        response = admin.post(editor_url, data={
+            "action": "create",
+            "question": question,
+            "category": category,
+            "options": "Ano\nNe",
+            "answer": "0",
+            "active": "1",
+        })
+        assert response.status_code == 302
+
+    admin_page = admin.get(editor_url).get_data(as_text=True)
+    assert "Python" in admin_page
+    assert "Matematika" in admin_page
+    assert 'name="category"' in admin_page
+
+    waiting = player_a.post("/python/azkviz/match")
+    hidden_category = admin.post(editor_url, data={
+        "action": "update_category",
+        "category": "Python",
+    })
+    assert hidden_category.status_code == 302
+
+    paired = player_b.post("/python/azkviz/match")
+    assert paired.status_code == 200
+    assert paired.json["id"] == waiting.json["id"]
+    game_state = player_a.get(
+        f"/python/azkviz/game/{waiting.json['id']}"
+    )
+    assert game_state.json["question"]["text"] == "Otázka z matematiky?"
+
+    disable_last_category = admin.post(
+        editor_url,
+        data={"action": "update_category", "category": "Matematika"},
+        follow_redirects=True,
+    )
+    assert "Musí zůstat alespoň jedna aktivní otázka." in disable_last_category.get_data(as_text=True)
+    with sqlite3.connect(tmp_path / "p.db") as conn:
+        assert conn.execute(
+            "SELECT active FROM az_question_categories WHERE name = 'Matematika'"
+        ).fetchone()[0] == 1
+
+
 def test_azkviz_question_export_import_merges_by_id(tmp_path: Path) -> None:
     app = _python_app(tmp_path)
     admin = app.test_client()
@@ -1036,8 +1094,12 @@ def test_azkviz_question_export_import_merges_by_id(tmp_path: Path) -> None:
     payload = json.loads(exported.data)
     assert payload["area"] == "azkviz"
     assert payload["items"]
+    assert payload["items"][0]["category"] == "Obecné"
+    assert payload["categories"] == [{"name": "Obecné", "active": True}]
     first_id = payload["items"][0]["id"]
     payload["items"][0]["question"] = "Upravená exportovaná otázka?"
+    payload["items"][0]["category"] = "Historie"
+    payload["categories"].append({"name": "Historie", "active": False})
     existing_ids = {item["id"] for item in payload["items"]}
     added_id = max(existing_ids) + 100
     payload["items"].append({
@@ -1055,13 +1117,18 @@ def test_azkviz_question_export_import_merges_by_id(tmp_path: Path) -> None:
     assert response.status_code == 302
     with sqlite3.connect(tmp_path / "p.db") as conn:
         questions = conn.execute(
-            "SELECT question FROM az_questions WHERE id IN (?, ?) ORDER BY id",
+            "SELECT question, category FROM az_questions "
+            "WHERE id IN (?, ?) ORDER BY id",
             (first_id, added_id),
         ).fetchall()
+        history_category = conn.execute(
+            "SELECT active FROM az_question_categories WHERE name = 'Historie'"
+        ).fetchone()
     assert questions == [
-        ("Upravená exportovaná otázka?",),
-        ("Nová importovaná otázka?",),
+        ("Upravená exportovaná otázka?", "Historie"),
+        ("Nová importovaná otázka?", "Obecné"),
     ]
+    assert history_category == (0,)
 
     payload["area"] = "python"
     wrong_area = admin.post(
@@ -1091,6 +1158,39 @@ def test_azkviz_import_accepts_utf8_bom(tmp_path: Path) -> None:
     )
     assert response.status_code == 200
     assert "Import otázek dokončen" in response.get_data(as_text=True)
+
+
+def test_azkviz_import_reports_question_and_invalid_source_key(tmp_path: Path) -> None:
+    app = _python_app(tmp_path)
+    admin = app.test_client()
+    _login(admin, app.config["ADMIN_EMAIL"])
+    payload = {
+        "format": "zelva-content",
+        "version": 1,
+        "area": "azkviz",
+        "items": [{
+            "id": 10,
+            "question": "Testovací otázka?",
+            "options": ["Ano", "Ne"],
+            "answer": 0,
+            "active": True,
+            "source_key": "c10a23b45678901234567890123456789",
+        }],
+    }
+
+    response = admin.post(
+        "/python/admin/azkviz/questions/import",
+        data={"file": (BytesIO(json.dumps(payload).encode("utf-8")), "bad.json")},
+        content_type="multipart/form-data",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert (
+        "Otázka #10 (položka 1): pole 'source_key' má neplatný formát"
+        in response.get_data(as_text=True)
+    )
+    assert "nalezeno 33 znaků" in response.get_data(as_text=True)
 
 
 def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(

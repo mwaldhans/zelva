@@ -30,6 +30,26 @@
 
     <section class="card mb-4">
         <div class="card-body">
+            <h2 class="h5">Kategorie</h2>
+            <p>Vypnuté kategorie se při hře nepoužijí. Nová kategorie vznikne při přidání otázky.</p>
+            {% for category in categories %}
+            <form method="post" class="d-inline-block mr-3 mb-2">
+                <input type="hidden" name="action" value="update_category">
+                <input type="hidden" name="category" value="{{ category.name }}">
+                <label class="mb-0">
+                    <input type="checkbox" name="active" value="1"{% if category.active %} checked{% endif %}>
+                    {{ category.name }}
+                </label>
+                <button class="btn btn-sm btn-outline-secondary ml-1" type="submit">Uložit</button>
+            </form>
+            {% else %}
+            <p class="mb-0">Zatím nejsou vytvořené žádné kategorie.</p>
+            {% endfor %}
+        </div>
+    </section>
+
+    <section class="card mb-4">
+        <div class="card-body">
             <h2 class="h5">Přenos otázek</h2>
             <p>Import sloučí otázky podle ID: nové přidá, shodná aktualizuje a ostatní zachová.</p>
             <a class="btn btn-outline-primary mb-2" href="{{ url_for('python.azkviz_export_questions') }}">Exportovat otázky (JSON)</a>
@@ -58,6 +78,13 @@
                     <label for="new-question">Otázka</label>
                     <textarea class="form-control" id="new-question" name="question" maxlength="500" required></textarea>
                 </div>
+                <div class="form-group">
+                    <label for="new-category">Kategorie</label>
+                    <input class="form-control" id="new-category" name="category" maxlength="100" value="Obecné" list="az-question-categories" required>
+                    <datalist id="az-question-categories">
+                        {% for category in categories %}<option value="{{ category.name }}">{% endfor %}
+                    </datalist>
+                </div>
                 <div class="form-row">
                     <div class="form-group col-md-8">
                         <label for="new-options">Možnosti odpovědí (2 až 6 řádků)</label>
@@ -78,13 +105,17 @@
     {% for question in questions %}
     <section class="card question-card mb-3{% if not question.active %} inactive{% endif %}">
         <div class="card-body">
-            <h3 class="h6">Otázka #{{ question.id }}{% if not question.active %} — neaktivní{% endif %}</h3>
+            <h3 class="h6">Otázka #{{ question.id }} — {{ question.category }}{% if not question.active %} — neaktivní{% endif %}</h3>
             <form method="post">
                 <input type="hidden" name="action" value="update">
                 <input type="hidden" name="question_id" value="{{ question.id }}">
                 <div class="form-group">
                     <label for="question-{{ question.id }}">Otázka</label>
                     <textarea class="form-control" id="question-{{ question.id }}" name="question" maxlength="500" required>{{ question.question }}</textarea>
+                </div>
+                <div class="form-group">
+                    <label for="category-{{ question.id }}">Kategorie</label>
+                    <input class="form-control" id="category-{{ question.id }}" name="category" maxlength="100" value="{{ question.category }}" list="az-question-categories" required>
                 </div>
                 <div class="form-row">
                     <div class="form-group col-md-8">

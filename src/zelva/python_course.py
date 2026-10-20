@@ -388,7 +388,8 @@ def init_db(database_path):
             options TEXT NOT NULL,
             answer INTEGER NOT NULL,
             active INTEGER NOT NULL DEFAULT 1,
-            source_key TEXT
+            source_key TEXT,
+            category TEXT NOT NULL DEFAULT 'Obecné'
         )
     """)
     question_columns = {
@@ -396,6 +397,20 @@ def init_db(database_path):
     }
     if "source_key" not in question_columns:
         conn.execute("ALTER TABLE az_questions ADD COLUMN source_key TEXT")
+    if "category" not in question_columns:
+        conn.execute(
+            "ALTER TABLE az_questions ADD COLUMN category TEXT NOT NULL DEFAULT 'Obecné'"
+        )
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS az_question_categories (
+            name TEXT PRIMARY KEY,
+            active INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    conn.execute("""
+        INSERT OR IGNORE INTO az_question_categories (name, active)
+        SELECT DISTINCT category, 1 FROM az_questions
+    """)
     conn.execute(
         "CREATE TABLE IF NOT EXISTS az_meta (key TEXT PRIMARY KEY, value TEXT)"
     )
@@ -417,6 +432,10 @@ def init_db(database_path):
                 ],
             )
         conn.execute("INSERT OR IGNORE INTO az_meta (key, value) VALUES ('questions_seeded', '1')")
+    conn.execute("""
+        INSERT OR IGNORE INTO az_question_categories (name, active)
+        SELECT DISTINCT category, 1 FROM az_questions
+    """)
     default_keys = {
         question["question"]: uuid5(
             NAMESPACE_URL, "zelva:azkviz:" + question["question"]
@@ -598,9 +617,32 @@ def _az_question_payload(row):
     }
 
 
+def _az_active_question_count(conn):
+    return conn.execute(
+        """
+        SELECT COUNT(*)
+        FROM az_questions q
+        JOIN az_question_categories c ON c.name = q.category
+        WHERE q.active = 1 AND c.active = 1
+        """
+    ).fetchone()[0]
+
+
+def _az_ensure_question_category(conn, category):
+    conn.execute(
+        "INSERT OR IGNORE INTO az_question_categories (name, active) VALUES (?, 1)",
+        (category,),
+    )
+
+
 def _az_next_question(conn, current_question=None):
     rows = conn.execute(
-        "SELECT id, question, options, answer FROM az_questions WHERE active = 1"
+        """
+        SELECT q.id, q.question, q.options, q.answer
+        FROM az_questions q
+        JOIN az_question_categories c ON c.name = q.category AND c.active = 1
+        WHERE q.active = 1
+        """
     ).fetchall()
     if not rows:
         if current_question is not None:
@@ -998,27 +1040,60 @@ def azkviz_admin_questions():
 
             if action == "delete_all":
                 conn.execute("DELETE FROM az_questions")
+                conn.execute("DELETE FROM az_question_categories")
                 conn.commit()
                 flash("Všechny otázky byly smazány. Před další hrou přidej alespoň jednu aktivní otázku.")
                 return redirect(url_for("python.azkviz_admin_questions"))
 
+            if action == "update_category":
+                category = request.form.get("category", "").strip()
+                category_active = int(request.form.get("active") == "1")
+                existing_category = conn.execute(
+                    "SELECT name FROM az_question_categories WHERE name = ?",
+                    (category,),
+                ).fetchone()
+                if not existing_category:
+                    flash("Kategorii se nepodařilo najít.", "error")
+                    return redirect(url_for("python.azkviz_admin_questions"))
+                conn.execute(
+                    "UPDATE az_question_categories SET active = ? WHERE name = ?",
+                    (category_active, category),
+                )
+                if _az_active_question_count(conn) < 1:
+                    conn.rollback()
+                    flash("Musí zůstat alespoň jedna aktivní otázka.", "error")
+                else:
+                    conn.commit()
+                    flash("Nastavení kategorie bylo uloženo.")
+                return redirect(url_for("python.azkviz_admin_questions"))
+
             if action == "delete":
                 existing = conn.execute(
-                    "SELECT active FROM az_questions WHERE id = ?", (question_id,)
+                    "SELECT category FROM az_questions WHERE id = ?", (question_id,)
                 ).fetchone()
                 if not existing:
                     flash("Otázku se nepodařilo najít.", "error")
-                elif existing["active"] and conn.execute(
-                    "SELECT COUNT(*) FROM az_questions WHERE active = 1"
-                ).fetchone()[0] <= 1:
-                    flash("Musí zůstat alespoň jedna aktivní otázka.", "error")
                 else:
                     conn.execute("DELETE FROM az_questions WHERE id = ?", (question_id,))
-                    conn.commit()
-                    flash("Otázka byla smazána.")
+                    conn.execute(
+                        """
+                        DELETE FROM az_question_categories
+                        WHERE name = ? AND NOT EXISTS (
+                            SELECT 1 FROM az_questions WHERE category = ?
+                        )
+                        """,
+                        (existing["category"], existing["category"]),
+                    )
+                    if _az_active_question_count(conn) < 1:
+                        conn.rollback()
+                        flash("Musí zůstat alespoň jedna aktivní otázka.", "error")
+                    else:
+                        conn.commit()
+                        flash("Otázka byla smazána.")
                 return redirect(url_for("python.azkviz_admin_questions"))
 
             question_text = request.form.get("question", "").strip()
+            question_category = request.form.get("category", "Obecné").strip()
             options = [option.strip() for option in request.form.get("options", "").splitlines()]
             options = [option for option in options if option]
             answer_raw = request.form.get("answer", "")
@@ -1027,37 +1102,35 @@ def azkviz_admin_questions():
                 action not in ("create", "update")
                 or not question_text
                 or len(question_text) > 500
+                or not question_category
+                or len(question_category) > 100
                 or not 2 <= len(options) <= 6
                 or any(len(option) > 120 for option in options)
                 or not answer_raw.isdigit()
                 or not 0 <= int(answer_raw) < len(options)
             ):
-                flash("Vyplň otázku, 2 až 6 odpovědí a označ správnou odpověď.", "error")
+                flash(
+                    "Vyplň otázku, kategorii, 2 až 6 odpovědí a označ správnou odpověď.",
+                    "error",
+                )
                 return redirect(url_for("python.azkviz_admin_questions"))
 
-            current_active = conn.execute(
-                "SELECT COUNT(*) FROM az_questions WHERE active = 1"
-            ).fetchone()[0]
             existing = None
             if action == "update":
                 existing = conn.execute(
-                    "SELECT active FROM az_questions WHERE id = ?", (question_id,)
+                    "SELECT category FROM az_questions WHERE id = ?", (question_id,)
                 ).fetchone()
                 if not existing:
                     flash("Otázku se nepodařilo najít.", "error")
                     return redirect(url_for("python.azkviz_admin_questions"))
-            next_active_count = current_active - (
-                int(existing["active"]) if existing else 0
-            ) + active
-            if next_active_count < 1:
-                flash("Musí zůstat alespoň jedna aktivní otázka.", "error")
-                return redirect(url_for("python.azkviz_admin_questions"))
 
+            _az_ensure_question_category(conn, question_category)
             if action == "create":
                 conn.execute(
                     """
-                    INSERT INTO az_questions (question, options, answer, active, source_key)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO az_questions
+                        (question, options, answer, active, source_key, category)
+                    VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         question_text,
@@ -1065,6 +1138,7 @@ def azkviz_admin_questions():
                         int(answer_raw),
                         active,
                         uuid4().hex,
+                        question_category,
                     ),
                 )
                 message = "Otázka byla přidána."
@@ -1072,7 +1146,7 @@ def azkviz_admin_questions():
                 conn.execute(
                     """
                     UPDATE az_questions
-                    SET question = ?, options = ?, answer = ?, active = ?
+                    SET question = ?, options = ?, answer = ?, active = ?, category = ?
                     WHERE id = ?
                     """,
                     (
@@ -1080,16 +1154,40 @@ def azkviz_admin_questions():
                         json.dumps(options, ensure_ascii=False),
                         int(answer_raw),
                         active,
+                        question_category,
                         question_id,
                     ),
                 )
+                conn.execute(
+                    """
+                    DELETE FROM az_question_categories
+                    WHERE name = ? AND name <> ? AND NOT EXISTS (
+                        SELECT 1 FROM az_questions WHERE category = ?
+                    )
+                    """,
+                    (
+                        existing["category"],
+                        question_category,
+                        existing["category"],
+                    ),
+                )
                 message = "Otázka byla uložena."
+            if _az_active_question_count(conn) < 1:
+                conn.rollback()
+                flash("Musí zůstat alespoň jedna aktivní otázka.", "error")
+                return redirect(url_for("python.azkviz_admin_questions"))
             conn.commit()
             flash(message)
             return redirect(url_for("python.azkviz_admin_questions"))
 
         questions = conn.execute(
-            "SELECT id, question, options, answer, active FROM az_questions ORDER BY id"
+            """
+            SELECT id, question, options, answer, active, category
+            FROM az_questions ORDER BY id
+            """
+        ).fetchall()
+        categories = conn.execute(
+            "SELECT name, active FROM az_question_categories ORDER BY name COLLATE NOCASE"
         ).fetchall()
         question_items = [
             {**dict(question), "options": json.loads(question["options"])}
@@ -1098,6 +1196,7 @@ def azkviz_admin_questions():
         return render_template(
             "python/azkviz_admin_questions.html",
             questions=question_items,
+            categories=[dict(category) for category in categories],
         )
     finally:
         conn.close()
@@ -1120,10 +1219,18 @@ def azkviz_export_questions():
                 "answer": row["answer"],
                 "active": bool(row["active"]),
                 "source_key": row["source_key"],
+                "category": row["category"],
             }
             for row in conn.execute(
-                "SELECT id, question, options, answer, active, source_key "
+                "SELECT id, question, options, answer, active, source_key, category "
                 "FROM az_questions ORDER BY id"
+            ).fetchall()
+        ]
+        categories = [
+            {"name": row["name"], "active": bool(row["active"])}
+            for row in conn.execute(
+                "SELECT name, active FROM az_question_categories "
+                "ORDER BY name COLLATE NOCASE"
             ).fetchall()
         ]
     finally:
@@ -1133,6 +1240,7 @@ def azkviz_export_questions():
         "version": 1,
         "area": "azkviz",
         "items": questions,
+        "categories": categories,
     }
     content = json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
     return send_file(
@@ -1158,38 +1266,107 @@ def azkviz_import_questions():
         imported = []
         imported_ids = set()
         imported_source_keys = set()
-        for item in items:
+        raw_categories = payload.get("categories", [])
+        if not isinstance(raw_categories, list):
+            raise ValueError("Pole 'categories' musí být seznam kategorií.")
+        imported_categories = {}
+        for index, category in enumerate(raw_categories, start=1):
+            location = f"Kategorie na pozici {index}"
+            if not isinstance(category, dict):
+                raise ValueError(f"{location} musí být objekt.")
+            name = category.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(f"{location}: pole 'name' musí být neprázdný text.")
+            name = name.strip()
+            if len(name) > 100:
+                raise ValueError(
+                    f"{location} „{name[:40]}“: název má {len(name)} znaků, "
+                    "maximum je 100."
+                )
+            if not isinstance(category.get("active"), bool):
+                raise ValueError(
+                    f"{location} „{name}“: pole 'active' musí být true nebo false."
+                )
+            if name in imported_categories:
+                raise ValueError(f"Kategorie „{name}“ je v souboru uvedena vícekrát.")
+            imported_categories[name] = int(category["active"])
+        for index, item in enumerate(items, start=1):
             if not isinstance(item, dict):
-                raise ValueError("Soubor obsahuje neplatnou otázku.")
+                raise ValueError(f"Položka {index}: otázka musí být objekt.")
             question_id = item.get("id")
             question = item.get("question")
             options = item.get("options")
             answer = item.get("answer")
             active = item.get("active")
             source_key = item.get("source_key")
-            if (
-                type(question_id) is not int
-                or question_id < 1
-                or question_id in imported_ids
-                or (
-                    source_key is not None
-                    and (
-                        not isinstance(source_key, str)
-                        or not re.fullmatch(r"[0-9a-f]{32}", source_key)
-                        or source_key in imported_source_keys
+            category = item.get("category", "Obecné")
+            location = (
+                f"Otázka #{question_id} (položka {index})"
+                if type(question_id) is int
+                else f"Položka {index}"
+            )
+            if type(question_id) is not int or question_id < 1:
+                raise ValueError(f"{location}: pole 'id' musí být kladné celé číslo.")
+            if question_id in imported_ids:
+                raise ValueError(f"{location}: ID {question_id} je v souboru duplicitní.")
+            if source_key is not None:
+                if not isinstance(source_key, str):
+                    raise ValueError(
+                        f"{location}: pole 'source_key' musí být text nebo chybět."
                     )
+                if not re.fullmatch(r"[0-9a-f]{32}", source_key):
+                    raise ValueError(
+                        f"{location}: pole 'source_key' má neplatný formát "
+                        f"(očekává se přesně 32 malých hexadecimálních znaků, "
+                        f"nalezeno {len(source_key)} znaků)."
+                    )
+                if source_key in imported_source_keys:
+                    raise ValueError(
+                        f"{location}: pole 'source_key' je v souboru duplicitní."
+                    )
+            if not isinstance(question, str) or not question.strip():
+                raise ValueError(f"{location}: pole 'question' musí být neprázdný text.")
+            if len(question.strip()) > 500:
+                raise ValueError(
+                    f"{location}: pole 'question' má {len(question.strip())} znaků, "
+                    "maximum je 500."
                 )
-                or not isinstance(question, str)
-                or not question.strip()
-                or len(question.strip()) > 500
-                or not isinstance(options, list)
-                or not 2 <= len(options) <= 6
-                or any(not isinstance(option, str) or not option.strip() or len(option.strip()) > 120 for option in options)
-                or type(answer) is not int
-                or not 0 <= answer < len(options)
-                or not isinstance(active, bool)
-            ):
-                raise ValueError("Otázka má neplatné ID, text, možnosti, správnou odpověď nebo stav.")
+            if not isinstance(options, list):
+                raise ValueError(f"{location}: pole 'options' musí být seznam.")
+            if not 2 <= len(options) <= 6:
+                raise ValueError(
+                    f"{location}: pole 'options' obsahuje {len(options)} možností; "
+                    "povolené jsou 2 až 6."
+                )
+            for option_index, option in enumerate(options, start=1):
+                if not isinstance(option, str) or not option.strip():
+                    raise ValueError(
+                        f"{location}: možnost {option_index} v poli 'options' "
+                        "musí být neprázdný text."
+                    )
+                if len(option.strip()) > 120:
+                    raise ValueError(
+                        f"{location}: možnost {option_index} v poli 'options' "
+                        f"má {len(option.strip())} znaků, maximum je 120."
+                    )
+            if type(answer) is not int or not 0 <= answer < len(options):
+                raise ValueError(
+                    f"{location}: pole 'answer' musí být celé číslo od 0 "
+                    f"do {len(options) - 1}."
+                )
+            if not isinstance(active, bool):
+                raise ValueError(
+                    f"{location}: pole 'active' musí být true nebo false."
+                )
+            if not isinstance(category, str) or not category.strip():
+                raise ValueError(
+                    f"{location}: pole 'category' musí být neprázdný text."
+                )
+            if len(category.strip()) > 100:
+                raise ValueError(
+                    f"{location}: pole 'category' má {len(category.strip())} znaků, "
+                    "maximum je 100."
+                )
             imported_ids.add(question_id)
             if source_key:
                 imported_source_keys.add(source_key)
@@ -1201,6 +1378,7 @@ def azkviz_import_questions():
                     answer,
                     int(active),
                     source_key,
+                    category.strip(),
                 )
             )
     except ValueError as error:
@@ -1219,7 +1397,16 @@ def azkviz_import_questions():
         }
         added = 0
         updated = 0
-        for question_id, question, options, answer, active, source_key in imported:
+        for category, active in imported_categories.items():
+            conn.execute(
+                """
+                INSERT INTO az_question_categories (name, active) VALUES (?, ?)
+                ON CONFLICT(name) DO UPDATE SET active = excluded.active
+                """,
+                (category, active),
+            )
+        for question_id, question, options, answer, active, source_key, category in imported:
+            _az_ensure_question_category(conn, category)
             existing = existing_by_source.get(source_key) if source_key else None
             if existing is None and source_key is None:
                 legacy_id_match = existing_by_id.get(question_id)
@@ -1237,28 +1424,36 @@ def azkviz_import_questions():
                 conn.execute(
                     """
                     UPDATE az_questions
-                    SET question = ?, options = ?, answer = ?, active = ?
+                    SET question = ?, options = ?, answer = ?, active = ?, category = ?
                     WHERE id = ?
                     """,
-                    (question, options, answer, active, existing["id"]),
+                    (question, options, answer, active, category, existing["id"]),
                 )
                 updated += 1
             else:
                 if source_key is None and question_id not in existing_by_id:
                     conn.execute(
                         """
-                        INSERT INTO az_questions (id, question, options, answer, active, source_key)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        INSERT INTO az_questions
+                            (id, question, options, answer, active, source_key, category)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (question_id, question, options, answer, active, uuid4().hex),
+                        (
+                            question_id, question, options, answer, active,
+                            uuid4().hex, category,
+                        ),
                     )
                 else:
                     conn.execute(
                         """
-                        INSERT INTO az_questions (question, options, answer, active, source_key)
-                        VALUES (?, ?, ?, ?, ?)
+                        INSERT INTO az_questions
+                            (question, options, answer, active, source_key, category)
+                        VALUES (?, ?, ?, ?, ?, ?)
                         """,
-                        (question, options, answer, active, source_key or uuid4().hex),
+                        (
+                            question, options, answer, active,
+                            source_key or uuid4().hex, category,
+                        ),
                     )
                 added += 1
                 inserted = conn.execute(
@@ -1268,9 +1463,9 @@ def azkviz_import_questions():
                     existing_rows.append(inserted)
                     existing_by_id[inserted["id"]] = inserted
                     existing_by_source[inserted["source_key"]] = inserted
-        if conn.execute("SELECT COUNT(*) FROM az_questions WHERE active = 1").fetchone()[0] < 1:
+        if _az_active_question_count(conn) < 1:
             conn.rollback()
-            flash("Po importu musí zůstat alespoň jedna aktivní otázka.", "error")
+            flash("Po importu musí zůstat alespoň jedna aktivní otázka v aktivní kategorii.", "error")
             return redirect(url_for("python.azkviz_admin_questions"))
         conn.commit()
         flash(
