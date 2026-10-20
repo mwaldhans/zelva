@@ -124,7 +124,7 @@
         </div>
     </section>
     <p>Hrají dva hráči. Správná odpověď ti dovolí obsadit volné pole, chybná předá tah soupeři a označí pole šedě. Šedé pole může vybrat pouze hráč, který je na tahu; potom se oběma otevře stejné reakční kolo a pole získá hráč s kratším časem. Vyhraje hráč, jehož souvislá skupina polí propojí všechny tři strany trojúhelníkové desky.</p>
-    <div class="d-flex flex-wrap mb-3" aria-label="Tvoje statistiky">
+    <div id="player-stats" class="d-flex flex-wrap mb-3" aria-label="Tvoje statistiky">
         <div class="az-stat mr-4"><strong>{{ stats.wins }}</strong><br>výher</div>
         <div class="az-stat mr-4"><strong>{{ stats.losses }}</strong><br>proher</div>
         <div class="az-stat mr-4"><strong>{{ stats.draws }}</strong><br>remíz</div>
@@ -314,6 +314,33 @@
     let lobbyTimer = null;
     let lobbyLoading = false;
     let lobbyView = false;
+    let refreshedStatsGameId = null;
+
+    async function refreshStatistics(completedGameId) {
+        if (refreshedStatsGameId === completedGameId) return;
+        refreshedStatsGameId = completedGameId;
+        try {
+            const response = await fetch(window.location.href, {cache: "no-store"});
+            if (!response.ok) {
+                throw new Error("Server vrátil stav " + response.status + ".");
+            }
+            const page = new DOMParser().parseFromString(
+                await response.text(),
+                "text/html"
+            );
+            const updatedStats = page.querySelector("#player-stats");
+            const updatedStandings = page.querySelector("#standings");
+            if (!updatedStats || !updatedStandings) {
+                throw new Error("Na stránce se nepodařilo najít statistiky.");
+            }
+            document.getElementById("player-stats").replaceWith(updatedStats);
+            standings.innerHTML = updatedStandings.innerHTML;
+        } catch (error) {
+            feedback.textContent =
+                "Výsledek hry je uložen, ale statistiky se nepodařilo obnovit: "
+                + error.message;
+        }
+    }
 
     function updateAnswerClock() {
         const active = currentGame
@@ -655,6 +682,7 @@
             winnerBanner.textContent = game.winner === "draw"
                 ? "REMÍZA"
                 : "🏆 VYHRÁL/A " + (game.winner_name || "hráč") + "!";
+            refreshStatistics(game.id);
         }
         updatePollRate(game.challenge ? 100 : game.status === "playing" ? 250 : 2000);
         if (game.challenge && !challengeRenderTimer) {

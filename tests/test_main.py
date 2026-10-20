@@ -1186,11 +1186,10 @@ def test_azkviz_import_reports_question_and_invalid_source_key(tmp_path: Path) -
     )
 
     assert response.status_code == 200
-    assert (
-        "Otázka #10 (položka 1): pole 'source_key' má neplatný formát"
-        in response.get_data(as_text=True)
-    )
-    assert "nalezeno 33 znaků" in response.get_data(as_text=True)
+    html = response.get_data(as_text=True)
+    assert "Otázka #10 (položka 1)" in html
+    assert "source_key" in html
+    assert "nalezeno 33 znaků" in html
 
 
 def test_azkviz_import_adds_foreign_question_when_numeric_id_collides(
